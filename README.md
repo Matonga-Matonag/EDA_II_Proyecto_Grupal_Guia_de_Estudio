@@ -1,4 +1,4 @@
-# README — Sistema de Análisis de Transacciones Bancarias Masivas
+# Sistema de Análisis de Transacciones Bancarias Masivas
 
 Este documento explica en detalle el código fuente `main.cpp`, sección por sección, tanto desde el punto de vista **técnico** (por qué está escrito así en C++) como **algorítmico** (qué estructura de datos se usa, su complejidad y su relación con los requisitos del proyecto). El objetivo es que sirva como guion de estudio para la sustentación con el profesor.
 
