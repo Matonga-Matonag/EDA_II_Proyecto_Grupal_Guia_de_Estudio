@@ -1,4 +1,4 @@
-# Sistema de Análisis de Transacciones Bancarias Masivas
+# README — Sistema de Análisis de Transacciones Bancarias Masivas
 
 Este documento explica en detalle el código fuente `main.cpp`, sección por sección, tanto desde el punto de vista **técnico** (por qué está escrito así en C++) como **algorítmico** (qué estructura de datos se usa, su complejidad y su relación con los requisitos del proyecto). El objetivo es que sirva como guion de estudio para la sustentación con el profesor.
 
@@ -607,18 +607,126 @@ HashTable   AVL Tree     ← cada Transaccion* insertada en AMBAS estructuras
 
 ---
 
-## 10. Resumen de complejidades (para la tabla del informe)
+## 10. Análisis detallado de complejidad (temporal y espacial)
 
-| Operación | Estructura usada | Complejidad teórica | Justificación |
+Esta sección profundiza en el análisis de complejidad de **cada estructura** y de **cada operación**, distinguiendo mejor caso, caso promedio y peor caso, y separando siempre el costo en **tiempo** del costo en **memoria (espacio)**. Es la sección que sustenta directamente el punto 3 ("Análisis... y análisis de complejidad") y el punto 6 ("Discusión") del informe técnico exigido por el PDF.
+
+### 10.1 Conceptos previos necesarios para la sustentación
+
+- **n** = número total de transacciones almacenadas en el sistema (mínimo 10,000 según el PDF).
+- **m** = tamaño de la tabla hash (`size`), fijado en el código como `15013` (constante, no crece con `n`).
+- **k** = número de elementos que se piden mostrar en una consulta acotada (ej. las primeras 20 o 50 transacciones cronológicas).
+- **factor de carga (load factor)** de una tabla hash: `α = n / m`. Es la métrica más importante para predecir el rendimiento real de una tabla hash con encadenamiento. Con `n = 10,000` y `m = 15013`, `α ≈ 0.666`, es decir, cada *bucket* (lista enlazada) tiene, en promedio, **menos de un elemento**. Esto es deliberado: el enunciado exige mínimo 10,000 registros, y el tamaño de la tabla (número primo mayor a n) se eligió precisamente para mantener `α < 1` y así garantizar que las listas de colisión sean muy cortas.
+- **Notación usada**: O(·) para cota superior (peor caso o caso general cuando no se distingue), Θ(·) cuando el mejor y el peor caso coinciden exactamente (por ejemplo, el AVL siempre garantiza altura Θ(log n), a diferencia de un BST simple que en el peor caso sería O(n)).
+
+### 10.2 Complejidad de `HashTableEncadenamiento` (tabla hash con encadenamiento)
+
+**Complejidad temporal**
+
+| Operación | Mejor caso | Caso promedio (con buena distribución) | Peor caso |
 |---|---|---|---|
-| Carga masiva (n transacciones) | Hash + AVL | O(n log n) | n inserciones AVL a O(log n) cada una (dominante); hash es O(1) amortizado por inserción |
-| Búsqueda por ID | Tabla Hash | O(1) amortizado | Acceso directo por posición hash + recorrido corto del *bucket* |
-| Inserción individual | Hash + AVL | O(log n) | Dominada por la inserción balanceada en AVL; hash es O(1) amortizado |
-| Consulta ordenada (cronológico, k elementos) | AVL (in-order) | O(k + log n) aprox. | Recorrido in-order con corte temprano al llegar a k elementos |
-| Consulta por rango de fechas | AVL (poda de ramas) | O(log n + m) | m = elementos en el rango; se descartan subárboles fuera de rango |
-| Actualización de estado | Tabla Hash | O(1) amortizado | Solo requiere localizar el puntero en el hash; el AVL no se modifica |
-| Eliminación | Hash + AVL | O(log n) | Dominada por el rebalanceo AVL; hash es O(1) amortizado |
-| Estadísticas generales | AVL (recorrido completo) | O(n) | Debe visitar cada transacción exactamente una vez |
+| `funcionHash(id)` | O(L) | O(L) | O(L) |
+| `insertar` | O(1) | O(1 + α) ≈ O(1) | O(n) |
+| `buscarPorId` / `buscar` | O(1) | O(1 + α) ≈ O(1) | O(n) |
+| `eliminar` | O(1) | O(1 + α) ≈ O(1) | O(n) |
+
+- `L` = longitud del string `id` (constante y muy pequeña en este proyecto: siempre 9 caracteres, formato `TX-XXXXXX`). Como `L` es constante y acotado, `funcionHash` es efectivamente **O(1)** en la práctica, aunque formalmente dependa de la longitud del string recorrido carácter por carácter.
+- El **caso promedio O(1 + α)** es el resultado clásico de teoría de tablas hash con encadenamiento: se paga 1 unidad por calcular la posición y, en promedio, `α` comparaciones adicionales por recorrer el *bucket* correspondiente. Con `α ≈ 0.666` en este proyecto, en la práctica cada operación hace **menos de una comparación adicional en promedio**, comportándose como una operación prácticamente constante.
+- El **peor caso teórico O(n)** ocurriría solo si la función hash distribuyera muy mal los datos y **todas** las transacciones cayeran en el mismo *bucket* (degenerando la lista enlazada de ese *bucket* a contener las n transacciones). Con DJB2 y un tamaño de tabla primo, este escenario es extremadamente improbable con datos reales como los IDs secuenciales `TX-000001...TX-010000`, pero sigue siendo la cota superior formal que debe mencionarse en el informe.
+- **Importante para la discusión del informe**: a diferencia del AVL, la tabla hash **no ofrece ninguna garantía determinística** de rendimiento — su buen comportamiento depende enteramente de la calidad de la función hash y de la relación `n/m`. Esto es una limitación intrínseca de las tablas hash que vale la pena mencionar al comparar ambas estructuras en la sección de Discusión del informe.
+
+**Complejidad espacial**
+
+| Componente | Espacio ocupado |
+|---|---|
+| Arreglo `tabla` (buckets) | Θ(m) — fijo, independiente de cuántos elementos se inserten |
+| Nodos de las listas enlazadas (todos los *buckets* combinados) | Θ(n) — un `Nodo` por cada transacción insertada |
+| Cada `Nodo` individual | O(1) — contiene una `tuple<string, Transaccion*>` (un string corto + un puntero de 8 bytes) y un puntero `nextNodo` (8 bytes) |
+| **Total tabla hash** | **Θ(n + m)** |
+
+- El espacio del arreglo `tabla` se reserva **por adelantado** con `new ListaEnlazada[size]` en el constructor, y es **constante** (no crece ni decrece aunque se inserten o eliminen transacciones) — son m = 15,013 objetos `ListaEnlazada` (cada uno solo con un puntero `head`, es decir, 8 bytes cada uno más overhead del objeto).
+- El espacio de los nodos **sí crece linealmente con n**, porque por cada transacción insertada se crea exactamente un `Nodo` nuevo en el heap (`new Nodo(...)`).
+- Nótese que la tabla hash **no almacena una copia de la `Transaccion`**, solo un puntero (`Transaccion*`) de 8 bytes (en una arquitectura de 64 bits). El objeto `Transaccion` real se cuenta como parte del costo compartido con el AVL (ver sección 10.4), no se duplica.
+- **Trade-off espacio/tiempo explícito**: el tamaño de tabla `m = 15013` fue elegido deliberadamente **más grande** que el mínimo de 10,000 transacciones exigido, sacrificando algo de memoria (buckets vacíos o con pocos elementos) a cambio de mantener `α < 1` y así garantizar tiempos de acceso casi constantes. Es un ejemplo clásico y citable de decisión de diseño espacio-vs-tiempo.
+
+### 10.3 Complejidad de `AVL` (árbol binario auto-balanceado)
+
+**Complejidad temporal**
+
+| Operación | Mejor caso | Caso promedio | Peor caso |
+|---|---|---|---|
+| `insert` (`insertR`) | Θ(log n) | Θ(log n) | Θ(log n) |
+| `eliminar` (`eliminarNodo`) | Θ(log n) | Θ(log n) | Θ(log n) |
+| Búsqueda de una clave puntual | Θ(log n) | Θ(log n) | Θ(log n) |
+| `mostrarCronologico(k)` (`inorderR`) | Θ(k) | Θ(k) | Θ(k), acotado por Θ(n) si k ≥ n |
+| `consultarRangoFechas` (`consultarRangoFechasR`) | Θ(log n) (rango vacío) | Θ(log n + m_r) | Θ(n) (rango cubre todo el árbol) |
+| `generarReporteEstadistico` (`calcularEstadisticasR`) | Θ(n) | Θ(n) | Θ(n) |
+| `rotateLeft` / `rotateRight` | Θ(1) | Θ(1) | Θ(1) |
+
+Donde `m_r` = número de transacciones que efectivamente caen dentro del rango de fechas consultado.
+
+- **Por qué el AVL garantiza Θ(log n) y no solo O(log n) o "O(n) en el peor caso" como un BST normal**: la propiedad AVL fuerza, después de **cada** inserción y eliminación, que el factor de equilibrio de todo nodo sea `|FE| ≤ 1` (mediante las 4 rotaciones implementadas). Esto matemáticamente garantiza que la altura del árbol nunca exceda `1.44 · log₂(n + 2) - 0.328` (cota demostrada formalmente en la teoría de árboles AVL), es decir, la altura está **acotada por ambos lados** por una función logarítmica — de ahí que se use la notación Θ (ajustada, no solo cota superior) en vez de O. Este es la diferencia crítica frente a un BST sin balanceo: si las 10,000 transacciones del CSV llegaran ya ordenadas cronológicamente (que es justamente el caso, ya que el archivo viene ordenado por fecha), un BST simple degeneraría en una lista enlazada de altura n, con búsquedas/inserciones O(n) — el AVL evita esto por construcción.
+- **Costo de las rotaciones**: cada rotación (`rotateLeft`/`rotateRight`) es Θ(1) porque solo reasigna un puñado fijo de punteros (no recorre subárboles). Sin embargo, en el peor caso una sola operación de inserción/eliminación puede requerir **hasta O(log n) actualizaciones de altura** (`updateH`) mientras la recursión "sube" desde la hoja hasta la raíz — pero como cada una de esas actualizaciones y su posible rotación asociada es Θ(1), el costo total de la operación completa sigue siendo Θ(log n), no Θ(log² n).
+- **`inorderR` con límite `k`**: gracias al corte temprano (`if (nodo == nullptr || contador >= limite) return;`), la función deja de descender por nuevas ramas en cuanto se alcanzan `k` elementos impresos. Sin embargo, cabe una precisión importante para la sustentación: como el árbol está ordenado por `fecha_hora_id` (no por profundidad), las primeras `k` claves cronológicas **no necesariamente están todas cerca de la raíz** — en el peor caso estructural, mostrar las primeras k transacciones cronológicas puede requerir descender hasta la hoja más a la izquierda del árbol (profundidad Θ(log n)) y luego recorrer hacia la derecha k veces, por lo que el costo real es **Θ(k + log n)**: el término `log n` cubre el descenso inicial hasta el nodo con la clave mínima, y el término `k` cubre la impresión de los k elementos siguientes en orden.
+- **`consultarRangoFechasR` — por qué la poda mejora el caso promedio**: el algoritmo solo desciende por la izquierda si `fechaNodo >= desde` y solo desciende por la derecha si `fechaNodo <= hasta`. Esto significa que las ramas completas del árbol que quedan totalmente fuera del rango **nunca se visitan**, ahorrando trabajo proporcional al tamaño de esas ramas descartadas. Formalmente, el costo es **Θ(log n + m_r)**, donde el término `log n` corresponde al camino desde la raíz hasta el primer nodo dentro del rango, y `m_r` corresponde a los nodos efectivamente visitados dentro (o adyacentes) al rango. En el peor caso (rango que cubre todas las fechas del sistema), `m_r = n` y la complejidad se degrada a Θ(n), equivalente a un recorrido completo — esto es esperable, porque no hay forma de reportar n resultados en menos de Θ(n).
+- **`generarReporteEstadistico` es intrínsecamente Θ(n)**, sin mejor ni peor caso distinguibles: no existe ningún atajo posible para calcular sumas, promedios, máximos/mínimos y conteos globales sin inspeccionar cada una de las n transacciones exactamente una vez. Es el único método de la clase `AVL` cuya complejidad no depende de la altura del árbol, sino directamente del número total de nodos.
+
+**Complejidad espacial**
+
+| Componente | Espacio ocupado |
+|---|---|
+| Cada `NodoAVL` | O(1) — un `string key` (tamaño fijo ~30 caracteres: `YYYY-MM-DD_HH:MM:SS_TX-XXXXXX`), un puntero `Transaccion*` (8 bytes), un `int h` (4 bytes) y dos punteros `left`/`right` (8 bytes cada uno) |
+| Todos los `NodoAVL` del árbol | Θ(n) — un nodo por cada transacción insertada |
+| Pila de llamadas recursivas (`insertR`, `eliminarNodo`, `inorderR`, `consultarRangoFechasR`, `calcularEstadisticasR`) | Θ(log n) en operaciones de inserción/eliminación/búsqueda puntual; hasta Θ(n) en el peor caso teórico para recorridos completos como `calcularEstadisticasR` (aunque en la práctica, gracias al balance AVL, la profundidad real de la recursión de un recorrido completo también está acotada por Θ(log n) por rama, sumando Θ(n) solo en número total de llamadas, no en profundidad simultánea de la pila) |
+| **Total árbol AVL** | **Θ(n)** en memoria de nodos, más Θ(log n) de espacio adicional (pila) durante cualquier operación individual de inserción/eliminación/búsqueda |
+
+- **Punto importante sobre la recursión y la memoria de pila**: todas las funciones del AVL (`insertR`, `eliminarNodo`, `inorderR`, `consultarRangoFechasR`) están implementadas de forma **recursiva**, lo cual consume espacio en la **pila de llamadas (call stack)** proporcional a la **profundidad de la recursión**, no al número total de nodos visitados. Gracias a la garantía de balance AVL, esa profundidad nunca excede Θ(log n) en las operaciones de inserción, eliminación y descenso hacia una clave puntual. Esto es una ventaja adicional del AVL frente a otras estructuras: **el espacio extra usado durante cualquier operación de modificación es logarítmico**, no lineal — algo que no estaría garantizado en un BST sin balanceo (donde la pila de recursión podría crecer hasta Θ(n) en el peor caso, con riesgo real de *stack overflow* con decenas de miles de transacciones si el árbol se desbalancea).
+- El `string key` de cada `NodoAVL` es una **cadena adicional** (no reutiliza el string `fecha`/`hora`/`id` de `Transaccion`, los concatena en un nuevo objeto `string`). Esto significa que, estrictamente, el AVL sí duplica una pequeña cantidad de información textual (aproximadamente 30 caracteres por nodo) además de guardar el puntero a la transacción — un costo de memoria adicional pero acotado y constante por nodo, aceptado como *trade-off* para simplificar la comparación de claves a una simple comparación de strings.
+
+### 10.4 Complejidad espacial global del sistema
+
+Es importante distinguir, para el informe, que **la memoria de las transacciones en sí (`Transaccion`) se cuenta una sola vez**, aunque sea referenciada desde dos estructuras:
+
+| Componente | Espacio |
+|---|---|
+| n objetos `Transaccion` (datos reales: 6 strings + 1 float) | Θ(n) — memoria "de dominio", contada una sola vez |
+| Estructura de la tabla hash (arreglo `tabla` + n `Nodo`) | Θ(n + m) |
+| Estructura del AVL (n `NodoAVL`, cada uno con su `string key` propio) | Θ(n) |
+| **Total del sistema (`GestorTransacciones` completo)** | **Θ(n + m)**, que con `m` constante (15,013) se simplifica a **Θ(n)** |
+
+- **Por qué no se cuenta el espacio de `Transaccion` dos veces**: tanto `HashTableEncadenamiento` como `AVL` almacenan únicamente **punteros** (`Transaccion*`, 8 bytes en arquitectura de 64 bits) hacia el mismo objeto en el heap, nunca una copia del objeto completo. Si en cambio cada estructura guardara una copia completa de `Transaccion` (con sus 6 `string` y su `float`), el costo de memoria del sistema se **duplicaría** innecesariamente. Este es uno de los argumentos técnicos más sólidos para justificar, en la sustentación, la decisión de diseño de compartir punteros en lugar de duplicar datos: se ahorra memoria proporcional a n y, adicionalmente (como ya se explicó en la sección 7.4), se garantiza consistencia automática entre ambas estructuras al actualizar el estado de una transacción.
+- **Overhead de punteros de la doble estructura**: aunque los datos no se duplican, sí existe un costo de memoria por **mantener dos estructuras de indexación en paralelo** (los `Nodo` de la lista hash + los `NodoAVL`), cada uno con su propio conjunto de punteros de navegación. Este es el costo esperado y aceptado de cualquier sistema que necesita **dos criterios de acceso distintos** (por ID y por fecha/hora) sobre el mismo conjunto de datos — es exactamente el mismo principio detrás de los índices secundarios en bases de datos relacionales, donde cada índice adicional consume espacio propio a cambio de acelerar un tipo de consulta específico.
+
+### 10.5 Complejidad de la carga masiva y del ciclo completo del CSV
+
+| Fase dentro de `cargarDesdeArchivo` (por cada línea leída) | Complejidad |
+|---|---|
+| Lectura de la línea (`getline(archivo, linea)`) | O(L), L = longitud de la línea (constante y pequeña) |
+| Tokenización con `stringstream` (8 campos) | O(L) |
+| Conversión `stof(montoStr)` | O(L) |
+| Verificación de duplicado (`tablaHash->buscarPorId`) | O(1) amortizado |
+| Inserción en hash (`tablaHash->insertar`) | O(1) amortizado |
+| Inserción en AVL (`arbolAVL->insert`) | Θ(log n) |
+| **Costo por línea** | **Θ(log n)** (dominado por la inserción AVL) |
+| **Costo total para n líneas** | **Θ(n log n)** |
+
+- Con `n = 10,000` (el archivo `transacciones_masivo.csv` incluido tiene exactamente 10,000 registros de datos más 1 línea de cabecera), `n log₂ n ≈ 10,000 × 13.3 ≈ 133,000` operaciones elementales estimadas para las inserciones en el árbol — esta es la cifra de referencia que debería ser consistente con el tiempo medido empíricamente por `mostrarTiempo("Carga", ...)` al ejecutar el programa, y es el tipo de razonamiento que se espera desarrollar en la sección de Discusión del informe (comparar la complejidad teórica contra el tiempo real medido).
+- **Espacio adicional durante la carga**: además del espacio final Θ(n) de las estructuras, durante la ejecución de `cargarDesdeArchivo` se usan variables locales de tamaño constante por iteración (`linea`, `id`, `origen`, etc., y el `stringstream ss`), que se reutilizan/destruyen en cada vuelta del `while` — es decir, **no se acumula memoria temporal proporcional a n durante la carga**, solo la memoria permanente de las estructuras finales.
+
+### 10.6 Tabla resumen de complejidades (para la tabla del informe)
+
+| Operación | Estructura(s) usada(s) | Complejidad temporal | Complejidad espacial adicional (aparte del almacenamiento fijo Θ(n)) | Justificación breve |
+|---|---|---|---|---|
+| Carga masiva (n transacciones) | Hash + AVL | Θ(n log n) | O(log n) de pila por cada inserción AVL (no acumulativo) | n inserciones AVL a Θ(log n) cada una (dominante); hash es O(1) amortizado por inserción |
+| Búsqueda por ID | Tabla Hash | O(1) amortizado / O(n) peor caso | O(1) | Acceso directo por posición hash + recorrido corto del *bucket* |
+| Inserción individual | Hash + AVL | Θ(log n) | O(log n) de pila (recursión AVL) | Dominada por la inserción balanceada en AVL; hash es O(1) amortizado |
+| Consulta ordenada (cronológico, k elementos) | AVL (in-order) | Θ(k + log n) | O(log n) de pila | Descenso inicial al mínimo + recorrido de k elementos con corte temprano |
+| Consulta por rango de fechas | AVL (poda de ramas) | Θ(log n + m_r) | O(log n) de pila | m_r = elementos en el rango; se descartan subárboles fuera de rango |
+| Actualización de estado | Tabla Hash | O(1) amortizado | O(1) | Solo requiere localizar el puntero en el hash; el AVL no se modifica |
+| Eliminación | Hash + AVL | Θ(log n) | O(log n) de pila (recursión AVL) | Dominada por el rebalanceo AVL; hash es O(1) amortizado |
+| Estadísticas generales | AVL (recorrido completo) | Θ(n) | O(log n) de pila (profundidad, no nodos totales) | Debe visitar cada transacción exactamente una vez; no hay atajo posible |
+
+**Complejidad espacial total del sistema (almacenamiento permanente):** Θ(n) para los datos de dominio (`Transaccion`) + Θ(n) para los nodos AVL + Θ(n + m) para la tabla hash (con m constante) = **Θ(n)** en total, ya que m es una constante fija (15,013) que no depende de n una vez elegida. En otras palabras: **la memoria total del sistema crece linealmente con la cantidad de transacciones**, con una pequeña constante multiplicativa por mantener dos estructuras de indexación (hash + AVL) en paralelo sobre el mismo conjunto de datos.
 
 ---
 
@@ -629,7 +737,7 @@ El sistema implementa un **gestor de transacciones bancarias** que combina dos e
 - Una **tabla hash con encadenamiento** (`HashTableEncadenamiento`, usando `funcionHash` con el algoritmo DJB2 y `ListaEnlazada` para resolver colisiones), que ofrece **búsqueda, inserción y eliminación por ID en tiempo casi constante (O(1) amortizado)** — ideal para las operaciones de "búsqueda por ID", "verificar duplicados al registrar" y "actualizar estado".
 - Un **árbol AVL auto-balanceado** (`AVL`/`NodoAVL`, indexado por la clave compuesta `fecha_hora_id`), que garantiza **inserción y eliminación en O(log n)** y permite **recorridos en orden cronológico** y **consultas eficientes por rango de fechas** con poda de subárboles irrelevantes — cumpliendo las funcionalidades de "consulta ordenada" y "consulta por rango".
 
-Ambas estructuras **comparten los mismos punteros `Transaccion*`** en lugar de duplicar los datos, lo que garantiza consistencia automática cuando se actualiza el estado de una transacción (un solo `setEstado()` es visible desde ambas estructuras) y evita errores de memoria como el *double free* (solo la tabla hash libera la memoria de las transacciones; el AVL solo libera sus propios nodos).
+Ambas estructuras **comparten los mismos punteros `Transaccion*`** en lugar de duplicar los datos, lo que garantiza consistencia automática cuando se actualiza el estado de una transacción (un solo `setEstado()` es visible desde ambas estructuras), evita errores de memoria como el *double free* (solo la tabla hash libera la memoria de las transacciones; el AVL solo libera sus propios nodos) y **ahorra memoria**: el costo espacial total del sistema es Θ(n) — lineal respecto al número de transacciones — en lugar de duplicarse por mantener dos índices independientes (ver sección 10.4). En cuanto al tiempo, la combinación de ambas estructuras logra que las operaciones más frecuentes (búsqueda, actualización) sean O(1) amortizado gracias al hash, mientras que las que requieren orden (consulta cronológica, por rango) se resuelven en Θ(log n) o Θ(log n + m) gracias a la garantía de balance del AVL, evitando la degradación a O(n) que sufriría un árbol binario simple con datos que ya llegan ordenados por fecha (ver sección 10.3).
 
 La clase `GestorTransacciones` actúa como **fachada** que sincroniza ambas estructuras en cada operación de negocio (registrar, cargar, actualizar, eliminar), y el `main()` provee un menú interactivo que además **mide el tiempo de ejecución de cada operación con `<chrono>`**, generando exactamente los datos que exige la tabla de resultados del informe técnico. Un conjunto de funciones de validación de entrada (`leer*`) garantiza que el sistema nunca reciba datos corruptos desde el teclado, reforzando la robustez y consistencia de los datos exigida en la rúbrica de evaluación.
 
