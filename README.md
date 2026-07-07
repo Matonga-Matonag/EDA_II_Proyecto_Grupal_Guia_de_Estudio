@@ -1,4 +1,4 @@
-# Sistema de Análisis de Transacciones Bancarias Masivas
+# README — Sistema de Análisis de Transacciones Bancarias Masivas
 
 Este documento explica en detalle el código fuente `main.cpp`, sección por sección, tanto desde el punto de vista **técnico** (por qué está escrito así en C++) como **algorítmico** (qué estructura de datos se usa, su complejidad y su relación con los requisitos del proyecto). El objetivo es que sirva como guion de estudio para la sustentación con el profesor.
 
@@ -84,16 +84,29 @@ class Nodo
 private:
     tuple<string, Transaccion *> tupla;
     Nodo *nextNodo;
-    ...
+public:
+    Nodo(string id, Transaccion *transaccion) { ... }
+    string getId() { return get<0>(tupla); }
+    Transaccion *getTransaccion() { return get<1>(tupla); }
+    Nodo *getNextNodo() { return nextNodo; }
+    void setNextNodo(Nodo *siguiente) { nextNodo = siguiente; }
 };
 
 class ListaEnlazada
 {
 private:
     Nodo *head;
-    ...
+public:
+    ListaEnlazada() { head = nullptr; }
+    ~ListaEnlazada() { ... }
+    void insertar(Transaccion *transaccion) { ... }
+    bool buscar(string id) { ... }
+    Transaccion *buscarPorId(string id) { ... }
+    void eliminar(string id) { ... }
 };
 ```
+
+> **Precisión importante sobre a quién pertenece cada método**: `Nodo` es una clase **puramente pasiva** — solo tiene *getters/setters* (`getId`, `getTransaccion`, `getNextNodo`, `setNextNodo`). No sabe "buscarse a sí mismo" ni recorrer nada. **Todos** los métodos de recorrido (`insertar`, `buscar`, `buscarPorId`, `eliminar`) pertenecen a `ListaEnlazada`, que es quien usa los *getters* de `Nodo` para navegar la lista con un puntero `tmp`/`actual` que avanza con `tmp = tmp->getNextNodo()`.
 
 ### Por qué existen
 El enunciado exige una tabla hash **implementada por el grupo**, sin usar `unordered_map`. Toda tabla hash necesita resolver **colisiones** (dos IDs distintos que producen la misma posición). El grupo eligió la técnica de **encadenamiento (chaining)**: cada posición del arreglo de la tabla hash no almacena una sola transacción, sino una **lista enlazada** de transacciones que colisionaron en esa posición. `Nodo` es el nodo de esa lista, y `ListaEnlazada` es la lista en sí.
@@ -102,14 +115,55 @@ El enunciado exige una tabla hash **implementada por el grupo**, sin usar `unord
 - `tuple<string, Transaccion *>`: se guarda un **puntero** a la transacción (no una copia del objeto completo) para que la misma instancia de `Transaccion` sea compartida entre la tabla hash y el árbol AVL. Esto es clave: **cada transacción existe una sola vez en memoria**, pero es *referenciada* desde dos estructuras distintas (hash y AVL). Si se guardaran copias, actualizar el estado de una transacción (`setEstado`) requeriría actualizarla en ambas estructuras por separado; al compartir el puntero, un solo `setEstado()` sobre el objeto es visible desde cualquiera de las dos estructuras.
 - `Nodo *nextNodo`: puntero al siguiente nodo de la lista, el mecanismo clásico de una lista enlazada simple.
 
-### Métodos y su complejidad
+### Métodos de `ListaEnlazada` y su complejidad
 | Método | Qué hace | Complejidad |
 |---|---|---|
 | `insertar(Transaccion*)` | Recorre hasta el final de la lista y agrega ahí (inserción al final) | O(n) en el peor caso, donde n = elementos en ese *bucket* |
-| `buscar(id)` / `buscarPorId(id)` | Recorre la lista comparando IDs | O(n) en el peor caso |
+| `buscar(id)` | Recorre la lista comparando IDs, devuelve `bool` | O(n) en el peor caso |
+| `buscarPorId(id)` | Recorre la lista comparando IDs, devuelve `Transaccion*` (o `nullptr`) | O(n) en el peor caso |
 | `eliminar(id)` | Recorre la lista manteniendo un puntero `anterior` para "saltar" el nodo eliminado | O(n) en el peor caso |
 
 En la práctica, si la tabla hash está bien dimensionada (ver sección 5), cada *bucket* tiene muy pocos elementos (idealmente 0 o 1), por lo que estas operaciones se comportan como **O(1) amortizado**.
+
+### `buscar` vs. `buscarPorId`: código duplicado y una observación de código muerto
+
+Comparando ambos métodos:
+
+```cpp
+bool buscar(string id)
+{
+    Nodo *tmp = head;
+    while (tmp != nullptr)
+    {
+        if (tmp->getId() == id) return true;
+        tmp = tmp->getNextNodo();
+    }
+    return false;
+}
+Transaccion *buscarPorId(string id)
+{
+    Nodo *tmp = head;
+    while (tmp != nullptr)
+    {
+        if (tmp->getId() == id) return tmp->getTransaccion();
+        tmp = tmp->getNextNodo();
+    }
+    return nullptr;
+}
+```
+
+Ambos recorren la lista con el **mismo bucle**, solo que uno devuelve `true`/`false` y el otro el puntero (o `nullptr`). `buscar` podría reescribirse para **reutilizar** `buscarPorId` en vez de duplicar el recorrido:
+
+```cpp
+bool buscar(string id)
+{
+    return buscarPorId(id) != nullptr;   // o, de forma más compacta: return buscarPorId(id);
+}
+```
+
+Esto funciona gracias a la **conversión implícita puntero → bool** de C++: cualquier puntero distinto de `nullptr` se evalúa como `true`, y `nullptr` como `false` — el mismo mecanismo que permite escribir `if (puntero)` en vez de `if (puntero != nullptr)`.
+
+**Dato adicional para la sustentación**: revisando todo `main.cpp`, **ni `HashTableEncadenamiento::buscar` ni `ListaEnlazada::buscar` son llamados jamás** en ninguna parte del programa — todas las operaciones (`nuevaTransaccion`, `cargarDesdeArchivo`, `ActualizarEstadoTransaccion`, `eliminarTransaccion`, `buscarTransaccion`) usan exclusivamente `buscarPorId`. Es decir, hoy `buscar()` es **código muerto** en ambas clases. Esto se puede mencionar como una observación de limpieza de código en la sección de Discusión/Conclusiones del informe: o se elimina por no usarse, o se refactoriza para reutilizar `buscarPorId` (evitando mantener dos bucles idénticos sincronizados manualmente, principio DRY — *Don't Repeat Yourself*).
 
 ### El destructor (`~ListaEnlazada`)
 ```cpp
@@ -178,6 +232,33 @@ En `main()`: `GestorTransacciones gestor(15013);`. El sistema debe soportar al m
 - **Eliminación**: igual, **O(1) amortizado**.
 - **Peor caso teórico**: O(n) si todas las transacciones colisionaran en el mismo *bucket* (extremadamente improbable con DJB2 y tamaño primo bien elegido).
 
+### `buscar` y `buscarPorId` a nivel de `HashTableEncadenamiento`
+
+```cpp
+bool buscar(string id)
+{
+    int posicion = funcionHash(id);
+    return tabla[posicion].buscar(id);        // delega en ListaEnlazada::buscar
+}
+Transaccion *buscarPorId(string id)
+{
+    int posicion = funcionHash(id);
+    return tabla[posicion].buscarPorId(id);   // delega en ListaEnlazada::buscarPorId
+}
+```
+
+Se repite exactamente el mismo patrón de la sección 4: `buscar` podría reescribirse para reutilizar `buscarPorId` en vez de delegar en `ListaEnlazada::buscar` (que internamente duplica el mismo recorrido):
+
+```cpp
+bool buscar(string id)
+{
+    int posicion = funcionHash(id);
+    return tabla[posicion].buscarPorId(id) != nullptr;
+}
+```
+
+Como ya se señaló: **ni `HashTableEncadenamiento::buscar` ni `ListaEnlazada::buscar` se llaman jamás** en `main.cpp` — todas las operaciones del programa (`nuevaTransaccion`, `cargarDesdeArchivo`, `ActualizarEstadoTransaccion`, `eliminarTransaccion`, `buscarTransaccion`) usan siempre `buscarPorId`. Es una observación de "código muerto" válida para mencionar en la Discusión del informe.
+
 ### Relación con el punto 3 del PDF
 Esta clase es exactamente la "tabla hash, para buscar transacciones rápidamente por su identificador" exigida como estructura obligatoria.
 
@@ -187,15 +268,38 @@ Esta clase es exactamente la "tabla hash, para buscar transacciones rápidamente
 
 Esta es la estructura más compleja del proyecto y satisface **tres** funcionalidades del PDF a la vez: orden cronológico (func. 4), consulta por rango de fechas (func. 5) y, de forma indirecta, las estadísticas (func. 8, mediante un recorrido completo).
 
-### 6.1 La clave compuesta
+### 6.1 `NodoAVL`: atributos privados
+
+```cpp
+class NodoAVL
+{
+private:
+    string key;               // "fecha_hora_id" para orden cronologico
+    Transaccion *transaccion; // puntero compartido con la tabla hash
+    int h;                    // altura del subárbol que cuelga de este nodo
+    NodoAVL *left;
+    NodoAVL *right;
+```
+
+- **`key`**: no es la fecha sola — es la concatenación `fecha + "_" + hora + "_" + id` (ver 6.1.1). Es la clave que el árbol usa para comparar y ordenar.
+- **`transaccion`**: puntero, no copia — el mismo objeto que también referencia la tabla hash.
+- **`h`**: la altura de **este nodo dentro de su propio subárbol** (no la profundidad desde la raíz). Es la variable que hace posible calcular el factor de equilibrio sin recorrer todo el árbol cada vez.
+- **`left`, `right`**: punteros a los hijos, como cualquier árbol binario.
+
+### 6.1.1 La clave compuesta (constructor de `NodoAVL`)
 
 ```cpp
 NodoAVL(Transaccion *tx)
 {
     key = tx->getFecha() + "_" + tx->getHora() + "_" + tx->getId();
-    ...
+    transaccion = tx;
+    h = 0;
+    left = nullptr;
+    right = nullptr;
 }
 ```
+
+Un nodo nuevo siempre nace como **hoja**: `h = 0` (una hoja tiene altura 0, con la convención de que un árbol vacío tiene altura -1) y ambos hijos en `nullptr`.
 
 **Decisión de diseño clave**: en vez de ordenar por fecha (`string fecha`) directamente, se concatenan `fecha + "_" + hora + "_" + id` en un solo string, por ejemplo:
 ```
@@ -204,48 +308,100 @@ NodoAVL(Transaccion *tx)
 
 Razones técnicas:
 1. **Orden lexicográfico = orden cronológico**, porque las fechas están en formato `YYYY-MM-DD` y las horas en `HH:MM:SS` (ambos formatos son "ordenables como texto": los años más grandes son textualmente "mayores", igual con meses, días, horas, etc. — esto solo funciona porque los campos tienen ancho fijo con ceros a la izquierda). Al comparar dos strings de este tipo con los operadores `<` y `>` de C++ (comparación lexicográfica carácter por carácter), el resultado coincide exactamente con "cuál transacción ocurrió antes".
-2. **Unicidad garantizada**: si dos transacciones ocurrieran exactamente en la misma fecha y hora, agregar el `id` al final asegura que la clave nunca se repita (evitando que el árbol trate a dos transacciones distintas como si fueran la misma clave).
+2. **Unicidad garantizada**: si dos transacciones ocurrieran exactamente en la misma fecha y hora, agregar el `id` al final asegura que la clave nunca se repita.
 3. Esto permite reutilizar un **árbol binario de búsqueda ordinario basado en comparación de strings**, sin necesitar convertir fechas a timestamps numéricos ni escribir un comparador personalizado.
 
-### 6.2 Estructura del nodo
+### 6.1.2 Getters/setters de `NodoAVL`
+
+Son *accessors* simples (`getKey`, `getTransaccion`, `getH`/`setH`, `getLeft`/`setLeft`, `getRight`/`setRight`), salvo dos que merecen atención especial:
 
 ```cpp
-class NodoAVL
-{
-private:
-    string key;
-    Transaccion *transaccion;
-    int h;              // altura del subárbol
-    NodoAVL *left;
-    NodoAVL *right;
-    ...
-};
+// Para la eliminacion
+void setKey(string nuevaKey) { key = nuevaKey; }
+void setTransaccion(Transaccion *nuevaTransaccion) { transaccion = nuevaTransaccion; }
 ```
 
-- `h`: la **altura** del nodo (usada para calcular el factor de equilibrio). Es la variable clásica que distingue un AVL de un BST simple.
-- `left` / `right`: punteros a los hijos, como en cualquier árbol binario.
-- Igual que en la tabla hash, `transaccion` es un **puntero compartido**, no una copia.
+Estos dos *setters* existen **exclusivamente** para el caso de eliminación con dos hijos (sección 6.9), donde en vez de mover punteros físicamente, se **copia** la clave y el puntero de transacción del nodo predecesor hacia el nodo que se quiere eliminar. No se usan en ningún otro lugar del código.
+
+### 6.2 `AVL`: el único atributo privado
+
+```cpp
+class AVL
+{
+private:
+    NodoAVL *root;
+```
+
+Solo hay **un atributo**: el puntero a la raíz. Todo lo demás es comportamiento (métodos). Cuando el árbol está vacío, `root == nullptr`.
 
 ### 6.3 Cálculo de altura y factor de equilibrio
 
 ```cpp
-int altura(NodoAVL *n) { if (n == nullptr) return -1; return n->getH(); }
-int getFE(NodoAVL *n) { if (n == nullptr) return 0; return altura(n->getLeft()) - altura(n->getRight()); }
-void updateH(NodoAVL *n) { ... n->setH(1 + max(altIzq, altDer)); }
+int altura(NodoAVL *n)
+{
+    if (n == nullptr) return -1;
+    return n->getH();
+}
+
+int getFE(NodoAVL *n)
+{
+    if (n == nullptr) return 0;
+    return altura(n->getLeft()) - altura(n->getRight());
+}
+
+void updateH(NodoAVL *n)
+{
+    if (n != nullptr)
+    {
+        int altIzq = altura(n->getLeft());
+        int altDer = altura(n->getRight());
+        n->setH(1 + max(altIzq, altDer));
+    }
+}
 ```
 
-- `altura(nullptr) == -1`: convención estándar en AVL (un árbol vacío tiene altura -1, una hoja tiene altura 0). Esto simplifica las fórmulas de balanceo.
-- **Factor de equilibrio (FE)** = altura(izquierda) − altura(derecha). Es la métrica central del algoritmo AVL: si `|FE| > 1`, el árbol está desbalanceado en ese nodo y se necesita una rotación.
-- `updateH` recalcula la altura de un nodo como `1 + max(altura_izq, altura_der)` cada vez que se inserta o elimina algo debajo de él — se llama después de cada inserción/eliminación recursiva, "subiendo" por la recursión.
+- **`altura(n)`**: envoltorio seguro sobre el atributo `h`. `altura(nullptr) == -1` es la convención estándar en AVL (un árbol vacío tiene altura -1, una hoja tiene altura 0), lo que simplifica las fórmulas de balanceo.
+- **`getFE(n)`** (factor de equilibrio) = `altura(izquierda) - altura(derecha)`. Es la métrica central del algoritmo AVL: `FE > 1` desbalance a la izquierda, `FE < -1` desbalance a la derecha, `-1 ≤ FE ≤ 1` balanceado.
+- **`updateH(n)`**: recalcula la altura de un nodo **a partir de sus hijos** ("1 + la altura del hijo más alto"). Se llama **después** de cualquier cambio estructural debajo de ese nodo, propagando la información de altura correctamente "subiendo" por la recursión.
 
-### 6.4 Rotaciones
+### 6.4 Rotaciones: `rotateRight` y `rotateLeft`
 
 ```cpp
-NodoAVL *rotateRight(NodoAVL *y) { ... }
-NodoAVL *rotateLeft(NodoAVL *x) { ... }
+NodoAVL *rotateRight(NodoAVL *y)
+{
+    NodoAVL *x = y->getLeft();
+    NodoAVL *T2 = x->getRight();
+
+    x->setRight(y);
+    y->setLeft(T2);
+
+    updateH(y);
+    updateH(x);
+
+    return x;
+}
 ```
 
-Son las dos rotaciones básicas del AVL. Toda rotación simple se compone reutilizando estas dos; los casos "doble rotación" (Izquierda-Derecha y Derecha-Izquierda) simplemente encadenan una rotación con la otra:
+Antes:
+```
+        y
+       / \
+      x   T3
+     / \
+    T1  T2
+```
+Después de `rotateRight(y)`:
+```
+      x
+     / \
+    T1  y
+       / \
+      T2  T3
+```
+
+`x` (el hijo izquierdo de `y`) sube a ocupar el lugar de `y`; `T2` (antiguo hijo derecho de `x`) pasa a ser el hijo izquierdo de `y`; `y` pasa a ser el hijo derecho de `x`. Se actualizan las alturas de `y` **primero** y de `x` **después** (el orden importa: `x` depende de la altura ya actualizada de `y`). Se retorna `x`, la **nueva raíz de este subárbol**.
+
+`rotateLeft` es el espejo exacto. Los casos de **doble rotación** (Izquierda-Derecha, Derecha-Izquierda) encadenan una rotación con la otra:
 
 ```cpp
 // Caso Derecha - Izquierda
@@ -256,30 +412,52 @@ if (bf < -1 && nuevaClave < nodo->getRight()->getKey())
 }
 ```
 
-Los **4 casos clásicos de desbalance AVL** (Izquierda-Izquierda, Derecha-Derecha, Izquierda-Derecha, Derecha-Izquierda) están implementados explícitamente tanto en `insertR` (inserción) como en `eliminarNodo` (eliminación), siguiendo el algoritmo estándar de los libros de estructuras de datos.
+Los **4 casos clásicos de desbalance AVL** (Izq-Izq, Der-Der, Izq-Der, Der-Izq) están implementados tanto en `insertR` como en `eliminarNodo`, con condiciones de decisión distintas entre ambos (ver 6.9).
 
-### 6.5 Inserción (`insertR`)
+### 6.5 Inserción recursiva (`insertR`)
 
 ```cpp
 NodoAVL *insertR(NodoAVL *nodo, Transaccion *transaccion, string nuevaClave)
 {
-    if (nodo == nullptr) return new NodoAVL(transaccion);
+    if (nodo == nullptr)
+        return new NodoAVL(transaccion);
+
     if (nuevaClave < nodo->getKey())
         nodo->setLeft(insertR(nodo->getLeft(), transaccion, nuevaClave));
     else if (nuevaClave > nodo->getKey())
         nodo->setRight(insertR(nodo->getRight(), transaccion, nuevaClave));
     else
         return nodo; // clave duplicada, no se inserta
+
     updateH(nodo);
     int bf = getFE(nodo);
-    // ... 4 casos de rotación ...
+
+    if (bf > 1 && nuevaClave < nodo->getLeft()->getKey())        // Izq-Izq
+        return rotateRight(nodo);
+    if (bf < -1 && nuevaClave > nodo->getRight()->getKey())      // Der-Der
+        return rotateLeft(nodo);
+    if (bf < -1 && nuevaClave < nodo->getRight()->getKey())      // Der-Izq
+    {
+        nodo->setRight(rotateRight(nodo->getRight()));
+        return rotateLeft(nodo);
+    }
+    if (bf > 1 && nuevaClave > nodo->getLeft()->getKey())        // Izq-Der
+    {
+        nodo->setLeft(rotateLeft(nodo->getLeft()));
+        return rotateRight(nodo);
+    }
     return nodo;
 }
 ```
 
-**Por qué es recursivo y retorna `NodoAVL*`**: es el patrón estándar de inserción en BST/AVL. Cada llamada recursiva **reconstruye el puntero del hijo** correspondiente (`nodo->setLeft(insertR(...))`), de modo que, si una rotación cambia la raíz de un subárbol, el nodo padre automáticamente apunta al nuevo nodo raíz de ese subárbol. Esto es lo que permite que el rebalanceo se propague correctamente "subiendo" desde la hoja insertada hasta la raíz del árbol completo.
+1. **Caso base**: llegar a `nullptr` es donde debe ir la nueva transacción → se crea el `NodoAVL` y se retorna.
+2. **Descenso recursivo**: se compara `nuevaClave` contra la clave del nodo actual (comportamiento estándar de un BST).
+3. **Por qué `nodo->setLeft(insertR(nodo->getLeft(), ...))` y no solo `insertR(nodo->getLeft(), ...)`**: `insertR` **reconstruye y retorna la nueva raíz del subárbol** tras insertar y posiblemente rebalancear. La variable local `nodo` dentro de la llamada recursiva es solo una copia del puntero recibido; la única forma en que el llamador se entera de "cuál es ahora la raíz de ese subárbol" es a través del **valor de retorno**. Sin la asignación, si en algún nivel inferior ocurre una rotación, el padre seguiría apuntando al nodo *viejo*, dejando el árbol estructuralmente inconsistente.
+4. **Clave duplicada** (`else return nodo`): no se inserta nada (en la práctica casi nunca ocurre, porque el `id` único forma parte de la clave).
+5. **Actualizar altura y factor de equilibrio**, ya con el nuevo elemento insertado en algún descendiente.
+6. **Los 4 casos de rotación**, decididos comparando `bf` y la posición de `nuevaClave` respecto al hijo relevante — en inserción se sabe exactamente por dónde se insertó el nuevo elemento, así que se puede decidir el tipo de rotación comparando esa clave directamente.
 
-**Complejidad**: O(log n), porque el AVL garantiza que su altura nunca exceda ~1.44·log₂(n). Esta es la ganancia principal de usar AVL en vez de un BST normal: un BST desbalanceado podría degenerar a O(n) (por ejemplo, si los datos llegan ya ordenados cronológicamente, como es el caso típico del CSV, que ya viene ordenado por fecha).
+**Complejidad**: Θ(log n), porque el AVL garantiza que su altura nunca exceda ~1.44·log₂(n) — a diferencia de un BST sin balanceo, que degeneraría a O(n) si los datos llegan ya ordenados (como el CSV, que viene ordenado por fecha).
 
 ### 6.6 Recorrido in-order limitado (`inorderR`) — Funcionalidad 4
 
@@ -293,9 +471,9 @@ void inorderR(NodoAVL *nodo, int &contador, int limite)
 }
 ```
 
-- Un **recorrido in-order** (izquierda → nodo → derecha) de un árbol binario de búsqueda visita los nodos en **orden ascendente de la clave**. Como la clave es `fecha_hora_id`, el recorrido in-order entrega automáticamente las transacciones **ordenadas cronológicamente**, sin necesidad de un `sort()` adicional. Esto responde exactamente a la Funcionalidad 4 del PDF.
-- **`int &contador`** (paso por referencia): esta es la razón central para usar `&` aquí. Como la función es recursiva y se llama a sí misma en las dos ramas (izquierda y derecha), el contador debe ser **una sola variable compartida** a través de todas las llamadas recursivas, no una copia local por cada llamada. Si se pasara por valor (`int contador`), cada llamada recursiva tendría su propia copia independiente y el conteo nunca se acumularía correctamente entre subárboles distintos. Al pasarlo por referencia, todas las llamadas leen y modifican la **misma** variable ubicada en el `main()`/función llamante original.
-- El corte temprano `contador >= limite` evita recorrer todo el árbol cuando ya se mostraron los `k` elementos pedidos (por ejemplo, 20 o 50, como sugiere el PDF), aunque en el peor caso (si `limite` es mayor al tamaño del árbol) sigue siendo O(n) por naturaleza de un recorrido in-order.
+- Un **recorrido in-order** (izquierda → nodo → derecha) visita los nodos en **orden ascendente de la clave**. Como la clave es `fecha_hora_id`, el recorrido in-order entrega automáticamente las transacciones **ordenadas cronológicamente**, sin necesidad de un `sort()` adicional.
+- **`int &contador`** (por referencia): al ser recursiva en dos ramas, el contador debe ser **una sola variable compartida** en todas las llamadas. Si se pasara por valor, cada llamada tendría su propia copia y el conteo nunca se acumularía correctamente entre subárboles.
+- El corte temprano `contador >= limite` evita recorrer todo el árbol una vez alcanzados los `k` elementos pedidos.
 
 ### 6.7 Consulta por rango de fechas (`consultarRangoFechasR`) — Funcionalidad 5
 
@@ -304,61 +482,108 @@ void consultarRangoFechasR(NodoAVL *nodo, string desde, string hasta, int &encon
 {
     if (nodo == nullptr) return;
     string fechaNodo = nodo->getKey().substr(0, 10);
+
     if (fechaNodo >= desde)
         consultarRangoFechasR(nodo->getLeft(), desde, hasta, encontrados, limite);
+
     if (fechaNodo >= desde && fechaNodo <= hasta)
     {
         if (!limite || encontrados < 30) nodo->getTransaccion()->imprimir();
         encontrados++;
     }
+
     if (fechaNodo <= hasta)
         consultarRangoFechasR(nodo->getRight(), desde, hasta, encontrados, limite);
 }
 ```
 
-Este es el algoritmo clásico de **búsqueda por rango en un BST/AVL**, y es más eficiente que recorrer todo el árbol:
+- `nodo->getKey().substr(0, 10)`: extrae solo la parte de fecha (los primeros 10 caracteres de la clave) para comparar contra `desde`/`hasta`, ignorando hora e ID.
+- **Los tres `if` son independientes, no un `if/else if`** — esto es clave: un nodo que **sí está dentro del rango** cumple las **tres condiciones simultáneamente** (`>= desde`, el AND completo, y `<= hasta`), por lo que las tres acciones ocurren para ese nodo: recorrer la izquierda, imprimir/contar, y recorrer la derecha. El orden en que aparecen estos tres `if` en el código **no afecta el resultado**, porque no dependen entre sí ni comparten un `else`. Si en cambio fuera un `if/else if/else` (mutuamente excluyentes), un nodo dentro del rango entraría solo en la primera rama que le calzara y nunca llegaría a ejecutar las siguientes — eso sí sería un bug real, perdiendo resultados y dejando de explorar la mitad derecha del árbol.
+- **Poda del recorrido (*pruning*)**: solo se visita el subárbol izquierdo si `fechaNodo >= desde` (si el nodo actual ya es menor que `desde`, todo su subárbol izquierdo también lo sería); simétricamente para la derecha con `<= hasta`. El algoritmo **no recorre todo el árbol**, solo la porción relevante al rango — más eficiente que O(n) en la práctica, aunque en el peor caso (rango que cubre todo) se degrada a Θ(n).
+- **`int &encontrados`** (por referencia): mismo razonamiento que en `inorderR`, contador compartido entre todas las llamadas recursivas.
+- **`bool limite`**: controla si se imprimen *todas* las coincidencias o solo las primeras 30, mientras `encontrados` siempre acumula el conteo real total.
 
-- `nodo->getKey().substr(0, 10)`: como la clave completa es `"fecha_hora_id"` y la fecha siempre ocupa exactamente los primeros 10 caracteres (`YYYY-MM-DD`), `substr(0,10)` extrae solo la parte de fecha para comparar contra `desde`/`hasta`, ignorando hora e ID.
-- **Poda del recorrido (pruning)**: 
-  - Solo se visita el **subárbol izquierdo** si `fechaNodo >= desde` (porque si la fecha actual ya es menor que el límite inferior, todo lo que esté a la derecha del nodo actual —incluyendo el propio nodo— podría estar en rango, pero lo que está más a la izquierda seguramente seguirá siendo menor a `desde`, aunque el código conservadoramente entra igual salvo que la condición falle. En términos generales, esta condición evita bajar innecesariamente por la izquierda cuando ya se sabe que esos valores son menores al rango buscado).
-  - Simétricamente, solo se visita el **subárbol derecho** si `fechaNodo <= hasta`.
-  - Esto significa que el algoritmo **no recorre todo el árbol**, solo la porción relevante al rango, siendo más eficiente que O(n) en la práctica (aunque su cota superior teórica en el peor caso, si el rango cubre todos los datos, sigue siendo O(n)).
-- **`int &encontrados`** (otra vez por referencia): mismo razonamiento que en `inorderR`. Es un contador compartido entre todas las llamadas recursivas para acumular el total de coincidencias, independientemente de en qué rama del árbol se encuentren.
-- **Parámetro `bool limite`**: controla si se imprimen *todas* las coincidencias o solo las primeras 30 (para no saturar la consola con miles de líneas si el rango es muy amplio), mientras que el contador `encontrados` siempre sigue acumulando el conteo real total, cumpliendo el requisito del PDF de "mostrar la cantidad de transacciones encontradas y una muestra de los resultados".
+### 6.8 `nodoMayorMenor` — encontrar el predecesor in-order
 
-### 6.8 Eliminación (`eliminarNodo`) — Funcionalidad 7
+```cpp
+NodoAVL *nodoMayorMenor(NodoAVL *nodo)
+{
+    NodoAVL *actual = nodo;
+    while (actual->getRight() != nullptr)
+        actual = actual->getRight();
+    return actual;
+}
+```
+
+Dado un subárbol (típicamente el hijo izquierdo de un nodo a eliminar), encuentra el nodo con la clave más grande de ese subárbol (el "mayor de los menores", equivalente al predecesor in-order), yendo siempre a la derecha hasta que no haya más hijo derecho. Es **iterativo**, no recursivo — no hace falta reconstruir punteros en el camino, solo "caminar" hasta el final.
+
+### 6.9 Eliminación recursiva (`eliminarNodo`) — Funcionalidad 7
 
 ```cpp
 NodoAVL *eliminarNodo(NodoAVL *nodo, string key)
 {
     if (nodo == nullptr) return nullptr;
-    if (key < nodo->getKey()) nodo->setLeft(eliminarNodo(nodo->getLeft(), key));
-    else if (key > nodo->getKey()) nodo->setRight(eliminarNodo(nodo->getRight(), key));
+
+    if (key < nodo->getKey())
+        nodo->setLeft(eliminarNodo(nodo->getLeft(), key));
+    else if (key > nodo->getKey())
+        nodo->setRight(eliminarNodo(nodo->getRight(), key));
     else
     {
-        // caso hoja, caso 1 hijo (der), caso 1 hijo (izq), caso 2 hijos
-        ...
+        // Nodo Hoja
+        if (nodo->getLeft() == nullptr && nodo->getRight() == nullptr)
+        {
+            delete nodo;
+            return nullptr;
+        }
+        // Un Hijo Derecho
+        if (nodo->getLeft() == nullptr)
+        {
+            NodoAVL *tmp = nodo->getRight();
+            delete nodo;
+            return tmp;
+        }
+        // Un Hijo Izquierdo
+        if (nodo->getRight() == nullptr)
+        {
+            NodoAVL *tmp = nodo->getLeft();
+            delete nodo;
+            return tmp;
+        }
+        // Dos Hijos
+        NodoAVL *tmp = nodoMayorMenor(nodo->getLeft());
+        nodo->setKey(tmp->getKey());
+        nodo->setTransaccion(tmp->getTransaccion());
+        nodo->setLeft(eliminarNodo(nodo->getLeft(), tmp->getKey()));
     }
+
     updateH(nodo);
     int bf = getFE(nodo);
-    // ... rebalanceo con los 4 casos AVL ...
+    if (bf > 1 && getFE(nodo->getLeft()) >= 0)   return rotateRight(nodo);
+    if (bf < -1 && getFE(nodo->getRight()) <= 0) return rotateLeft(nodo);
+    if (bf < -1 && getFE(nodo->getRight()) > 0)  { nodo->setRight(rotateRight(nodo->getRight())); return rotateLeft(nodo); }
+    if (bf > 1 && getFE(nodo->getLeft()) < 0)    { nodo->setLeft(rotateLeft(nodo->getLeft())); return rotateRight(nodo); }
     return nodo;
 }
 ```
 
-Sigue el algoritmo estándar de eliminación en BST, con los **4 casos** típicos:
-1. **Nodo hoja** (sin hijos): se elimina directamente.
-2. **Un solo hijo derecho**: el nodo se reemplaza por su hijo derecho.
-3. **Un solo hijo izquierdo**: el nodo se reemplaza por su hijo izquierdo.
-4. **Dos hijos**: se busca el **"mayor de los menores"** (`nodoMayorMenor`, el nodo más a la derecha del subárbol izquierdo — equivalente al predecesor in-order), se copian su clave y su transacción al nodo actual, y luego se elimina recursivamente ese nodo predecesor de su posición original (que por construcción tiene a lo sumo un hijo, cayendo en los casos 1-3).
+**Descenso**: igual que en `insertR`, comparando la clave a eliminar y reasignando el resultado al hijo correspondiente.
 
-Tras cualquier eliminación, se recalcula la altura (`updateH`) y se aplican las mismas 4 rotaciones AVL que en la inserción, para que el árbol **nunca pierda su propiedad de balance** incluso después de eliminar nodos.
+**Los 4 sub-casos cuando se encuentra el nodo**:
+1. **Nodo hoja**: se libera (`delete nodo`) y se retorna `nullptr`.
+2. **Solo hijo derecho**: se guarda el puntero al hijo, se libera el nodo actual, se retorna ese hijo.
+3. **Solo hijo izquierdo**: simétrico.
+4. **Dos hijos**: se busca el predecesor in-order (`nodoMayorMenor` sobre el hijo izquierdo), se **copian** su `key` y su `transaccion` hacia el nodo a eliminar (con los *setters* especiales de `NodoAVL`), y se elimina recursivamente al predecesor de su posición original — como ese predecesor nunca tiene hijo derecho, esa eliminación recursiva siempre cae en el caso 1 o 2 (sin riesgo de recursión infinita).
 
-**Complejidad**: O(log n), igual que la inserción, gracias al balance garantizado por AVL.
+**Por qué es imprescindible `nodo->setLeft(eliminarNodo(nodo->getLeft(), tmp->getKey()))` y no solo `eliminarNodo(nodo->getLeft(), tmp->getKey())`**: si se omitiera la asignación, en el caso más común (el predecesor `tmp` es una hoja) ocurriría lo siguiente: `eliminarNodo` encuentra `tmp`, hace `delete nodo` (liberando físicamente esa memoria) y retorna `nullptr` — si ese `nullptr` se descarta, `nodo->left` **seguiría apuntando a memoria ya liberada**: un **puntero colgante (dangling pointer)**. Cualquier operación futura que intente leer `nodo->getLeft()->getKey()` accedería a memoria inválida → comportamiento indefinido (puede corromper datos o causar un *segmentation fault*, posiblemente mucho después y en un lugar sin relación aparente con la eliminación real). Incluso si `tmp` no fuera hoja, cualquier rotación en niveles inferiores cambia la raíz de ese subárbol, y ese cambio **solo se comunica hacia arriba a través del `return`** — sin la asignación, el árbol quedaría con el balance AVL perdido silenciosamente.
 
-**Importante**: `eliminarNodo` **no** hace `delete` sobre la `Transaccion*` (solo sobre el `NodoAVL`), por la razón de gestión de memoria explicada en la sección 4 (evitar doble liberación, ya que la tabla hash es la responsable de eso).
+**Rebalanceo tras eliminar — condiciones distintas a `insertR`**: en inserción se compara contra `nuevaClave` (se sabe por dónde se insertó); en eliminación no hay una "clave nueva" que guíe la decisión, así que se consulta el **factor de equilibrio del hijo relevante** (`getFE(nodo->getLeft())` / `getFE(nodo->getRight())`) para decidir si la rotación debe ser simple o doble. Es la diferencia clásica entre rebalanceo de inserción vs. eliminación en un AVL.
 
-### 6.9 Estadísticas generales (`calcularEstadisticasR`) — Funcionalidad 8
+**Complejidad**: Θ(log n), igual que la inserción.
+
+**Importante**: `eliminarNodo` **no** hace `delete` sobre la `Transaccion*` (solo sobre el `NodoAVL`) — evita el *double free*, ya que la tabla hash es la responsable de liberar las transacciones (sección 4).
+
+### 6.10 Estadísticas generales (`calcularEstadisticasR`) — Funcionalidad 8
 
 ```cpp
 void calcularEstadisticasR(NodoAVL *nodo, int &total, float &montoTotal, float &maxM, float &minM,
@@ -378,11 +603,80 @@ void calcularEstadisticasR(NodoAVL *nodo, int &total, float &montoTotal, float &
 }
 ```
 
-- Es un **recorrido completo del árbol** (no importa el orden, aquí no se usa in-order estrictamente, aunque de hecho sí visita izquierda y luego derecha) que acumula, en una sola pasada, **todos** los indicadores que pide la Funcionalidad 8 del PDF: total de transacciones, monto total, monto máximo/mínimo (y sus transacciones asociadas), y conteos por tipo y por estado.
-- **Explosión de parámetros por referencia (`int &total`, `float &montoTotal`, `Transaccion *&mayor`, etc.)**: aquí es donde el uso de `&` se vuelve crítico y merece explicación detallada porque hay **16 parámetros de referencia**. Al ser una función **recursiva** que se llama dos veces por nodo (una para el hijo izquierdo, otra para el derecho), cada una de esas 16 variables debe ser la **misma variable física** en cada nivel de la recursión para que los acumulados (sumas, conteos, comparaciones de máximo/mínimo) sean correctos a través de todo el árbol. Si cualquiera de esos parámetros se pasara por valor, cada llamada recursiva operaría sobre su propia copia y, al terminar esa llamada, el cambio se perdería (el `total++` de un subárbol nunca se sumaría al total global).
-- `Transaccion *&mayor`: nótese que esta es una **referencia a un puntero** (`&` aplicado sobre `Transaccion *`), no una referencia a un objeto `Transaccion`. Esto permite que la función interna reasigne *cuál puntero* apunta a la transacción de mayor/menor monto, y que ese cambio sea visible en la variable original declarada en `generarReporteEstadistico()`.
-- **Complejidad**: O(n), porque no hay forma de calcular estadísticas globales (total, promedio, máximos) sin visitar cada transacción exactamente una vez. Es el único método de la clase `AVL` que es intrínsecamente O(n) por naturaleza del problema, no por una limitación del árbol.
-- `generarReporteEstadistico()` es el método público que declara las 16 variables locales, las inicializa (`maxM = -1.0`, `minM = FLT_MAX`, contadores en 0, punteros en `nullptr`) y llama a `calcularEstadisticasR` pasándolas por referencia; luego imprime el reporte formateado.
+Es un **recorrido completo del árbol** (visita izquierda y derecha sin aprovechar el orden — para estadísticas globales no hay atajo que dependa de que el árbol esté ordenado) que acumula en una sola pasada todos los indicadores de la Funcionalidad 8.
+
+#### 6.10.1 Por qué 16 parámetros por referencia (`int &`, `float &`)
+
+La razón de fondo es la **recursión de árbol binario en dos ramas**: la función se llama a sí misma dos veces por nodo (izquierda y derecha). Con n = 10,000 transacciones hay ~10,000 marcos de llamada distintos, cada uno con sus propias variables locales. Los 16 acumuladores deben ser **una sola variable física** compartida por todos esos marcos para que las sumas y conteos se acumulen correctamente. Al declarar `int &total`, el parámetro es un **alias** de la variable original declarada en `generarReporteEstadistico()` — cualquier `total++` en cualquier nivel modifica esa única variable.
+
+**Qué pasaría sin `&` (por valor)**: cada llamada recursiva operaría sobre su propia copia local; al hacer `total++` solo se incrementa esa copia, y como la función es `void` (no hay `return valor;` que la rescate), esa copia se destruye al salir. La variable original en `generarReporteEstadistico()` **nunca se modificaría** — el reporte final mostraría `Total: 0`, `Monto total: 0`, etc., aunque el árbol tuviera miles de transacciones reales.
+
+#### 6.10.2 Por qué `Transaccion *&mayor` (referencia a un puntero, no solo un puntero)
+
+`mayor` ya es un puntero; lo que cambia no es el **contenido** del objeto apuntado, sino **a cuál objeto apunta** la variable (`mayor = transaccion;` reasigna el puntero mismo). Si `mayor` fuera un puntero **por valor**, esa reasignación solo afectaría la copia local — el `mayor` real en `generarReporteEstadistico()` seguiría en `nullptr` para siempre. Se necesita una referencia **al puntero mismo**: `Transaccion *&mayor` se lee "`mayor` es una referencia a un puntero a `Transaccion`" — un alias de la variable-puntero completa.
+
+| Declaración | Qué permite modificar de forma visible para el llamador |
+|---|---|
+| `Transaccion *mayor` (por valor) | El contenido apuntado, pero **no** a cuál objeto apunta `mayor` |
+| `Transaccion *&mayor` (referencia al puntero) | **Ambas cosas** — y sobre todo, a cuál objeto apunta la variable, que es justo lo que necesita este algoritmo |
+
+#### 6.10.3 Complejidad
+
+**Θ(n)** — no hay forma de calcular estadísticas globales sin visitar cada transacción exactamente una vez. Es el único método de `AVL` cuya complejidad no depende de la altura del árbol, sino directamente del número total de nodos.
+
+`generarReporteEstadistico()` es el método público que declara las 16 variables locales, las inicializa (`maxM = -1.0`, `minM = FLT_MAX`, contadores en 0, punteros en `nullptr`), llama a `calcularEstadisticasR` pasándolas por referencia, y luego imprime el reporte formateado.
+
+#### 6.10.4 Alternativa de diseño: agrupar los 16 parámetros en un `struct`
+
+Los 16 parámetros por referencia se pueden reemplazar por **un solo parámetro por referencia** a un `struct` acumulador, con el mismo comportamiento y mucho menos riesgo de error al declarar la firma:
+
+```cpp
+struct EstadisticasAcumulador
+{
+    int total = 0;
+    float montoTotal = 0.0f;
+    float maxM = -1.0f;
+    float minM = FLT_MAX;
+    Transaccion *mayor = nullptr;
+    Transaccion *menor = nullptr;
+    int transferencias = 0, retiros = 0, pagos = 0, compras = 0, depositos = 0;
+    int aprobadas = 0, pendientes = 0, rechazadas = 0, observadas = 0, anuladas = 0;
+};
+
+void calcularEstadisticasR(NodoAVL *nodo, EstadisticasAcumulador &acc)
+{
+    if (nodo == nullptr) return;
+    Transaccion *tx = nodo->getTransaccion();
+    acc.total++;
+    acc.montoTotal += tx->getMonto();
+    if (tx->getMonto() > acc.maxM) { acc.maxM = tx->getMonto(); acc.mayor = tx; }
+    if (tx->getMonto() < acc.minM) { acc.minM = tx->getMonto(); acc.menor = tx; }
+    if (tx->getTipo() == "Transferencia") acc.transferencias++;
+    if (tx->getTipo() == "Retiro")        acc.retiros++;
+    if (tx->getTipo() == "PagoServicio")  acc.pagos++;
+    if (tx->getTipo() == "CompraWeb")     acc.compras++;
+    if (tx->getTipo() == "Depósito")      acc.depositos++;
+    if (tx->getEstado() == "Aprobada")   acc.aprobadas++;
+    if (tx->getEstado() == "Pendiente")  acc.pendientes++;
+    if (tx->getEstado() == "Rechazada")  acc.rechazadas++;
+    if (tx->getEstado() == "Observada")  acc.observadas++;
+    if (tx->getEstado() == "Anulada")    acc.anuladas++;
+    calcularEstadisticasR(nodo->getLeft(), acc);
+    calcularEstadisticasR(nodo->getRight(), acc);
+}
+
+void generarReporteEstadistico()
+{
+    EstadisticasAcumulador acc;   // todos los campos ya nacen inicializados por el struct
+    calcularEstadisticasR(root, acc);
+    if (acc.total == 0) { cout << "No hay datos para mostrar." << endl; return; }
+    // ... imprimir usando acc.total, acc.montoTotal, acc.mayor, etc. ...
+}
+```
+
+`EstadisticasAcumulador &acc` es una referencia, así que `acc` es un alias del **mismo struct físico** en todos los niveles de la recursión. Los inicializadores de miembro por defecto del struct (`int total = 0;`, `float minM = FLT_MAX;`) hacen que `EstadisticasAcumulador acc;` ya deje todos los campos correctamente inicializados, eliminando las 16 líneas de inicialización manual que existían antes.
+
+**Otras alternativas posibles** (menos recomendables): (a) que cada llamada recursiva **retorne** su propio struct y el nodo padre los combine con los de sus hijos (estilo funcional, sin `&`, pero con copias adicionales por nivel); (b) convertir los acumuladores en **atributos de `AVL`** (evita parámetros, pero acopla la función a un estado oculto que habría que resetear manualmente); (c) variables globales (descartable). La opción del `struct` por referencia es la que ofrece la mejor relación entre preservar el comportamiento actual y reducir el riesgo de errores — una mejora válida para mencionar en la sección de Conclusiones del informe.
 
 ---
 
@@ -424,6 +718,8 @@ Implementa literalmente la Funcionalidad 2 del PDF: *"Antes de insertarla, debe 
 2. Crear el objeto `Transaccion` en el heap (`new`).
 3. Insertar el **mismo puntero** en ambas estructuras (`tablaHash->insertar` y `arbolAVL->insert`) — de nuevo, el objeto vive una sola vez en memoria, referenciado desde dos estructuras.
 
+**Detalle técnico sobre `if (tablaHash->buscarPorId(id))`**: `buscarPorId` no devuelve un `bool` — devuelve un **puntero** (`Transaccion *`): la transacción encontrada, o `nullptr` si no existe. Que esto funcione dentro de un `if` se debe a la **conversión implícita puntero → bool** de C++: cualquier puntero distinto de `nullptr` se evalúa como `true`, y `nullptr` se evalúa como `false`. La línea es exactamente equivalente, en significado, a `if (tablaHash->buscarPorId(id) != nullptr)`. Existe también un método `bool buscar(string id)` en `HashTableEncadenamiento` que hace lo mismo de forma más explícita (ver sección 5) — el grupo probablemente usó `buscarPorId` de forma uniforme en toda la clase porque, en la mayoría de los demás métodos de `GestorTransacciones` (`ActualizarEstadoTransaccion`, `eliminarTransaccion`, `buscarTransaccion`), sí se necesita el puntero real, no solo el booleano.
+
 ### 7.2 `cargarDesdeArchivo` — Funcionalidad 1 (carga masiva)
 
 ```cpp
@@ -460,14 +756,62 @@ void cargarDesdeArchivo(string nombreArchivo, char separador = ',', bool tieneCa
 
 Detalles clave:
 - **Parámetros con valores por defecto** (`char separador = ','`, `bool tieneCabecera = true`): permiten llamar a la función simplemente como `gestor.cargarDesdeArchivo("archivo.csv")` para el caso más común (CSV separado por comas con cabecera), sin tener que especificar todos los argumentos siempre. En `main()` se llama explícitamente con `,` para dejar claro el separador usado.
-- **`ifstream archivo(nombreArchivo)`**: abre el archivo en modo lectura de texto. Se valida `archivo.is_open()` para manejar el caso de archivo inexistente o ruta incorrecta (robustez exigida en la rúbrica).
-- **`tieneCabecera` como variable mutable dentro del bucle**: es un truco simple para "consumir" solo la primera línea del CSV (el encabezado `id,origen,cliente,...`) y luego dejar de aplicar ese filtro en las siguientes iteraciones — se reutiliza el mismo parámetro como si fuera una bandera de "primera vez".
-- **`stringstream ss(linea)` + múltiples `getline(ss, campo, separador)`**: es la técnica estándar en C++ para partir ("tokenizar") una línea de texto por un delimitador, ya que C++ no tiene un `split()` nativo como Python. Cada `getline(ss, variable, ',')` extrae el siguiente fragmento de texto hasta la próxima coma.
-- **Limpieza del carácter `\r`**: los archivos CSV generados o editados en sistemas Windows usan terminación de línea `\r\n`, mientras que en Linux/Mac es solo `\n`. Al leer con `getline` (que solo separa por `\n`), el `\r` puede quedar pegado al final del último campo (`estado`). El código detecta y elimina ese carácter invisible para evitar que, por ejemplo, el estado quede guardado como `"Aprobada\r"` en vez de `"Aprobada"` (lo cual rompería comparaciones como `estado == "Aprobada"` en las estadísticas).
-- **Verificación de duplicados también en la carga masiva** (`tablaHash->buscarPorId(id) == nullptr`): garantiza que, si el CSV tuviera un ID repetido por error, solo se inserte la primera ocurrencia — consistencia de datos entre hash y árbol, tal como pide la rúbrica ("consistencia de los datos entre la hash y el árbol").
-- **Contadores `contadorHash` y `contadorAVL`**: el PDF pide explícitamente mostrar "la cantidad de registros insertados en la hash y en el árbol" tras la carga masiva (Escenario de prueba 1). Aunque en este código siempre son iguales (porque cada inserción exitosa va a ambas estructuras a la vez), mantenerlos separados documenta claramente para el lector/evaluador que ambas estructuras están sincronizadas.
+- **`ifstream archivo(nombreArchivo)`**: abre el archivo en modo lectura de texto. Se valida `archivo.is_open()` para manejar el caso de archivo inexistente o ruta incorrecta (robustez exigida en la rúbrica). Si falla, se hace `return;` inmediato, antes de tocar `tablaHash` o `arbolAVL`.
 
-**Complejidad total de la carga masiva**: si hay `n` transacciones en el archivo, cada una realiza: 1 búsqueda hash O(1) amortizado + 1 inserción hash O(1) amortizado + 1 inserción AVL O(log n). Por lo tanto, la carga completa es **O(n log n)** — dominada por las `n` inserciones en el árbol AVL, ya que las operaciones de hash son más rápidas en promedio.
+#### Cómo `linea` recibe su valor sin un `=` visible: `getline` por referencia
+
+`string linea;` solo **reserva** la variable (la crea vacía) — no tiene contenido del archivo todavía. El contenido llega en cada `while (getline(archivo, linea))`. La firma real de `getline` (simplificada) es:
+
+```cpp
+istream& getline(istream& flujo, string& variable);
+```
+
+Nótese el `&` después de `string`: `getline` recibe `variable` **por referencia** — no una copia, sino un alias directo de la variable que se le pasa. Cuando `getline` internamente asigna el texto leído a `variable`, en realidad está modificando **tu** `linea` original, porque ambas son la misma caja de memoria (el mismo mecanismo de referencia que ya vimos con `int &contador` en `inorderR`, solo que aquí ya viene implementado dentro de la función de la biblioteca estándar). Concretamente, en cada vuelta del `while`, `getline(archivo, linea)`: (1) lee todos los caracteres desde la posición actual del cursor del archivo hasta el próximo `\n`; (2) escribe ese texto directamente en `linea` (gracias a la referencia); (3) avanza el cursor del archivo; (4) devuelve el propio `archivo`, que se interpreta como `true`/`false` según si la lectura tuvo éxito — así el `while` sabe cuándo detenerse (al llegar al final del archivo) sin necesitar una condición explícita como `while (!archivo.eof())` (que de hecho sería una práctica incorrecta y propensa a errores).
+
+`linea` es la **misma variable reutilizada y sobrescrita** en cada vuelta del bucle, no una nueva cada vez.
+
+#### `tieneCabecera` — un parámetro reutilizado como "interruptor de una sola vez"
+
+```cpp
+if (tieneCabecera)
+{
+    tieneCabecera = false; // Ignora solo la primera linea
+    continue;
+}
+```
+
+A diferencia de la "asignación invisible" de `getline`, aquí `tieneCabecera = false;` es una asignación normal y explícita. `tieneCabecera` es un parámetro de la función (variable local, como si se hubiera declarado dentro del cuerpo). En la primera vuelta del `while`, si llegó como `true` (valor por defecto), entra al bloque, se pone en `false`, y `continue` salta el resto del cuerpo para esa vuelta (sin tokenizar esa línea como datos) y pasa a leer la siguiente línea. En todas las vueltas siguientes, `tieneCabecera` ya vale `false`, así que la condición nunca se vuelve a cumplir. Es, en esencia, un interruptor que nace encendido (si el archivo trae cabecera) y se apaga solo, una única vez.
+
+- **Descarte de líneas vacías** (`if (linea.empty()) continue;`): protección contra líneas en blanco al final del archivo — sin esto, `stof("")` sobre un campo vacío lanzaría una excepción.
+
+#### `stringstream ss(linea)` y la tokenización con `getline(ss, campo, separador)`
+
+```cpp
+stringstream ss(linea);
+string id, origen, cliente, tipo, fecha, hora, estado, montoStr;
+getline(ss, id, separador);
+getline(ss, origen, separador);
+...
+```
+
+`stringstream` convierte un `string` ya existente en memoria en un **flujo de entrada** (*input stream*), exactamente como `ifstream` trata un archivo en disco como un flujo — la diferencia es que `ss` "lee" del contenido de `linea`, no del disco, y mantiene su **propio cursor**, independiente del cursor de `archivo`.
+
+Aquí se usa la versión de **tres argumentos** de `getline` — una firma distinta a la de dos argumentos usada para leer del archivo:
+
+```cpp
+istream& getline(istream& flujo, string& variable, char delimitador);
+```
+
+Mientras la versión de 2 argumentos siempre usa `\n` como delimitador, la de 3 argumentos permite elegir **cualquier carácter** como delimitador — aquí, `separador` (la coma). Cada llamada consecutiva `getline(ss, campo, ',')` lee desde donde quedó el cursor de `ss` hasta la próxima coma, guarda ese fragmento en `campo`, y avanza el cursor — por eso el orden de las 8 llamadas debe coincidir exactamente con el orden real de las columnas del CSV (`id, origen, cliente, tipo, monto, fecha, hora, estado`): cada llamada agarra secuencialmente el siguiente fragmento, sin "buscar" posiciones.
+
+`montoStr` se extrae como texto (nunca directamente como `float`, porque `getline` solo puede extraer `string`) y se convierte a número recién en el siguiente paso, con `stof`.
+
+- **Limpieza del carácter `\r`**: los archivos generados/editados en Windows usan terminación `\r\n`; `getline(archivo, linea)` solo separa por `\n`, dejando el `\r` pegado al final del último campo (`estado`). El código detecta y elimina ese carácter invisible con `estado.pop_back()` (tras verificar `!estado.empty()` para no acceder a `.back()` de un string vacío) — sin esto, `estado` podría quedar como `"Aprobada\r"` en vez de `"Aprobada"`, rompiendo silenciosamente comparaciones como `estado == "Aprobada"` en las estadísticas.
+- **Verificación de duplicados también en la carga masiva** (`tablaHash->buscarPorId(id) == nullptr`): garantiza que, si el CSV tuviera un ID repetido por error, solo se inserte la primera ocurrencia — consistencia de datos entre hash y árbol.
+- **`stof(montoStr)` sin `try/catch`**: si `montoStr` no fuera un número válido, `stof` lanzaría una excepción que, al no estar capturada, terminaría el programa abruptamente — una posible mejora a mencionar en la Discusión del informe sería envolver esto en `try/catch` para mayor robustez ante archivos malformados.
+- **Contadores `contadorHash` y `contadorAVL`**: el PDF pide explícitamente mostrar "la cantidad de registros insertados en la hash y en el árbol" tras la carga masiva (Escenario de prueba 1). Aunque en este código siempre son iguales (cada inserción exitosa va a ambas estructuras a la vez), mantenerlos separados documenta claramente que ambas estructuras están sincronizadas.
+
+**Complejidad total de la carga masiva**: si hay `n` transacciones en el archivo, cada una realiza: 1 búsqueda hash O(1) amortizado + 1 inserción hash O(1) amortizado + 1 inserción AVL Θ(log n). Por lo tanto, la carga completa es **Θ(n log n)** — dominada por las `n` inserciones en el árbol AVL.
 
 ### 7.3 `eliminarTransaccion` — Funcionalidad 7, con auto-verificación
 
@@ -503,7 +847,7 @@ Puntos importantes:
 
 ## 8. Funciones auxiliares fuera de las clases
 
-### 8.1 `mostrarTiempo` — medición de rendimiento (sección 5 del informe)
+### 8.1 `mostrarTiempo` y el mecanismo de medición con `<chrono>`
 
 ```cpp
 void mostrarTiempo(const string &operacion,
@@ -515,28 +859,203 @@ void mostrarTiempo(const string &operacion,
 }
 ```
 
-- **`const string &operacion`**: aquí `&` se usa por **eficiencia**, no por necesidad de modificar el valor. Pasar un `string` por valor implica copiar todo su contenido cada vez que se llama a la función; pasarlo por **referencia constante** (`const string&`) evita esa copia (se pasa solo la dirección de memoria) y el `const` garantiza que la función no pueda modificar accidentalmente el string original del que la llama. Es el patrón recomendado en C++ para pasar objetos "de solo lectura" que no son tipos primitivos.
-- Los parámetros `inicio` y `fin` sí se pasan **por valor** porque son `time_point`, un tipo pequeño (esencialmente un número/entero interno de `chrono`) — copiarlos no tiene costo relevante, a diferencia de un `string`.
-- `chrono::duration<double, std::milli>`: crea una duración expresada en **milisegundos** como número de punto flotante (`double`), a partir de la resta de dos `time_point` (`fin - inicio`). `.count()` extrae ese número para poder imprimirlo. Este mecanismo es el que llena exactamente la columna "Tiempo de ejecución" de la tabla exigida en la sección 5 del informe (carga masiva, búsqueda por ID, inserción, consulta ordenada, consulta por rango, actualización, eliminación).
-- **Uso en `main()`**: cada opción del menú envuelve la llamada al `GestorTransacciones` correspondiente entre `auto inicio = chrono::high_resolution_clock::now();` y `auto fin = ...::now();`, y luego llama a `mostrarTiempo(...)`. `high_resolution_clock` se eligió (en vez de, por ejemplo, `system_clock`) porque está diseñado específicamente para medir intervalos cortos con la mayor precisión disponible en el sistema, ideal para medir operaciones que pueden tardar microsegundos o milisegundos (como una búsqueda por hash).
+#### `high_resolution_clock` — el reloj usado
 
-### 8.2 Funciones de validación de entrada (`leerEntero`, `leerMonto`, `leerTexto`, `leerTipo`, `leerEstado`, `leerFecha`, `leerHora`, `leerId`, `esDigito`)
+```cpp
+auto inicio = high_resolution_clock::now();
+```
 
-Todas siguen el mismo patrón defensivo: **bucle infinito (`while(true)`) que solo termina con `return` cuando la entrada es válida**, mostrando un mensaje de error y volviendo a pedir el dato en caso contrario. Esto asegura que el programa **nunca crashee ni continúe con datos corruptos** por una mala entrada del usuario, lo cual es relevante para la rúbrica ("consistencia de los datos").
+- `high_resolution_clock` es uno de los tres relojes de `<chrono>` (junto a `system_clock` y `steady_clock`), elegido por ofrecer la **mayor precisión posible** del sistema — ideal para medir operaciones muy rápidas, como una búsqueda hash que puede tardar microsegundos.
+- `now()` es una función **estática** que devuelve **el instante actual** — una "foto" del reloj. Su tipo de retorno es `chrono::high_resolution_clock::time_point`: un "punto en el tiempo" (un instante, no una duración).
+- **`auto`**: le pide al compilador que infiera el tipo a partir de lo que devuelve `now()`, evitando escribir el nombre completo `chrono::high_resolution_clock::time_point` a mano. `auto inicio = high_resolution_clock::now();` es exactamente equivalente a escribir el tipo completo explícitamente.
 
-Detalles técnicos específicos:
+#### El patrón "sándwich": medir solo la operación, no la espera del usuario
 
-- **`leerEntero` / `leerMonto`**: usan `cin.fail()` para detectar si el usuario ingresó algo que no es un número (por ejemplo, letras), y `cin.peek() == '\n'` para asegurar que **no haya caracteres extra después del número** en la misma línea (por ejemplo, si el usuario escribe `"5abc"`, `cin >> valor` leería `5` pero dejaría `"abc"` pendiente en el buffer; el chequeo de `peek()` detecta que después del número no viene inmediatamente un salto de línea, y por tanto rechaza la entrada). Si falla, se limpia el estado de error (`cin.clear()`) y se descarta el resto del buffer hasta el siguiente `'\n'` (`while (cin.get() != '\n') {}`), para evitar que el bucle vuelva a leer la misma entrada corrupta infinitamente.
-- **`leerTexto`**: usa `getline(cin >> ws, texto)` en vez de `cin >> texto`. `cin >> ws` primero descarta cualquier espacio en blanco pendiente en el buffer (incluyendo el `\n` que quedó de una lectura anterior con `cin >>`), y luego `getline` permite leer nombres de cliente con posibles espacios internos completos (aunque en el CSV se usan guiones bajos `Ana_Torres`, esta función soporta ambos casos con robustez).
-- **`leerTipo` / `leerEstado`**: comparan la entrada contra una lista fija de valores válidos (`"Transferencia", "Retiro", "PagoServicio", "CompraWeb", "Deposito"` y `"Aprobada", "Pendiente", "Rechazada", "Observada", "Anulada"` respectivamente), que corresponden exactamente a los valores permitidos sugeridos por el PDF.
-- **`leerFecha`**: valida formato `YYYY-MM-DD` verificando: longitud exacta (10 caracteres), guiones en las posiciones 4 y 7, que el resto de caracteres sean dígitos (`esDigito`), y rangos lógicos de mes (1-12) y día (1-31). No valida días exactos por mes (por ejemplo, no rechaza el 31 de febrero) para mantener la validación simple, algo que se puede mencionar como una limitación conocida ante el profesor.
-- **`leerHora`**: análogo a `leerFecha`, pero para formato `HH:MM:SS`, validando rangos de horas (0-23), minutos y segundos (0-59).
-- **`leerId`**: valida el formato exacto `TX-XXXXXX` (9 caracteres: "TX-" + 6 dígitos), coincidiendo con el formato de ID usado en el CSV de ejemplo del PDF (`TX-000001`).
-- **`esDigito(char c)`**: función pequeña y reutilizada (`return c >= '0' && c <= '9';`) que verifica si un carácter es un dígito, usando comparación directa de valores ASCII/char en vez de la función estándar `isdigit()` de `<cctype>` — una decisión de implementar manualmente hasta este detalle mínimo, consistente con el espíritu del proyecto de "no usar utilidades de más alto nivel de lo necesario".
+```cpp
+auto inicio = chrono::high_resolution_clock::now();   // (1) foto del reloj ANTES
+gestor.buscarTransaccion(id);                          // (2) la operación que se quiere medir
+auto fin = chrono::high_resolution_clock::now();       // (3) foto del reloj DESPUÉS
+mostrarTiempo("Busqueda", inicio, fin);                // (4) calcular e imprimir la diferencia
+```
+
+Es crítico que `inicio` y `fin` envuelvan **exactamente** la operación y nada más. En el `main()` real, cualquier lectura de datos por teclado (`leerId(...)`, `leerEstado()`, etc.) ocurre **antes** de `auto inicio = ...`, precisamente para que el tiempo que el usuario tarda en escribir no contamine la medición del costo algorítmico real.
+
+#### Cómo `mostrarTiempo` calcula la diferencia
+
+- **`const string &operacion`**: referencia constante — evita copiar el string (eficiencia) y garantiza que la función no lo modifique. Mismo patrón recomendado para pasar cualquier objeto de "solo lectura" que no sea un tipo primitivo.
+- **`inicio` y `fin` se pasan por valor** (sin `&`): a diferencia de `operacion`, un `time_point` es un tipo pequeño internamente (esencialmente un número), así que copiarlo no tiene costo relevante.
+- **`fin - inicio`**: aunque `fin` e `inicio` son instantes (no duraciones), `chrono` tiene sobrecargado el operador `-` para que restar dos instantes dé como resultado una **duración** — el tiempo transcurrido entre ambos (análogo a "las 3:00 PM menos las 2:45 PM son 15 minutos").
+- **`chrono::duration<double, std::milli>`**: el tipo al que se convierte esa resta. `duration` es una plantilla que recibe (a) el tipo numérico interno (`double`, para tener precisión fraccionaria) y (b) la unidad (`std::milli` = milisegundos; también existen `std::micro`, `std::nano`, `std::ratio<1>` para segundos). El resultado crudo de `fin - inicio` viene en la unidad nativa del reloj (usualmente nanosegundos), y `chrono` hace la conversión de unidades automáticamente al asignarlo a esta variable — no hay ninguna división manual escrita en el código.
+- **`.count()`**: `tiempo` no es un número "puro" — es un objeto `chrono::duration<...>` que encapsula cantidad y unidad (para evitar sumar milisegundos con segundos por error). `.count()` extrae el valor numérico interno (`double`) para poder imprimirlo con `cout <<`.
+
+**Ejemplo numérico**: si `fin - inicio` valen 3,400 nanosegundos (la unidad nativa del reloj), al convertir a `duration<double, std::milli>`, `chrono` divide automáticamente entre 1,000,000 → `tiempo.count()` devuelve `0.0034`, y se imprime `"Tiempo de Busqueda: 0.0034 ms"`.
+
+#### `using namespace chrono;` dentro de `main()`
+
+Justo antes de la carga masiva automática, el código escribe `using namespace chrono;`, permitiendo usar `high_resolution_clock::now()` sin el prefijo `chrono::`. Más adelante, dentro del `switch` del menú, el código vuelve a escribir el prefijo completo (`chrono::high_resolution_clock::now()`) en cada `case` — ambas formas son válidas y equivalentes; es solo una inconsistencia de estilo, sin efecto en el comportamiento.
+
+#### Relación exacta con la tabla de tiempos del PDF
+
+Cada fila de la tabla de la sección 5 del informe corresponde a una llamada específica a `mostrarTiempo` dispersa en `main()`:
+
+| Fila de la tabla del informe | Llamada en el código |
+|---|---|
+| Carga masiva | `mostrarTiempo("Carga", inicio, fin)` (antes del menú) |
+| Búsqueda por ID | `mostrarTiempo("Busqueda", inicio, fin)` (case 2) |
+| Inserción individual | `mostrarTiempo("Insercion", inicio, fin)` (case 1) |
+| Consulta ordenada | `mostrarTiempo("Consulta Cronologica", inicio, fin)` (case 3) |
+| Consulta por rango | `mostrarTiempo("Consulta por Rango", inicio, fin)` (case 4) |
+| Actualización | `mostrarTiempo("Actualizacion", inicio, fin)` (case 5) |
+| Eliminación | `mostrarTiempo("Eliminacion", inicio, fin)` (case 6) |
+
+Nótese que el **case 7 (estadísticas)** es el único que **no** mide tiempo con `chrono` — la tabla del PDF tampoco lo exige explícitamente, lo cual explica la omisión, aunque sería una mejora sencilla agregarlo de todas formas (es una operación Θ(n) interesante de reportar en la Discusión).
+
+### 8.2 Funciones de validación de entrada
+
+Todas las funciones `leer*` comparten el mismo patrón defensivo:
+
+```cpp
+TipoDeRetorno leerAlgo(...)
+{
+    TipoDeRetorno valor;
+    while (true)          // bucle infinito
+    {
+        // pedir el dato al usuario
+        // validar
+        if (/* es inválido */) { mostrar error; continue; }
+        return valor;      // única forma de salir del bucle
+    }
+}
+```
+
+No hay un número fijo de intentos — la función sigue pidiendo el dato **hasta que sea válido**. El único punto de salida es el `return` dentro del `if` de éxito; `continue` hace que el `while` vuelva a evaluar su condición (`true`, siempre se cumple) y repita el cuerpo desde el inicio. Esto garantiza que **el programa nunca continúa con un dato inválido**, la base de la robustez exigida en la rúbrica ("consistencia de los datos").
+
+#### `leerEntero` — `cin.fail()`, `cin.peek()` y limpieza de buffer
+
+```cpp
+int leerEntero(string mensaje)
+{
+    int valor;
+    while (true)
+    {
+        cout << mensaje;
+        cin >> valor;
+        if (!cin.fail() && cin.peek() == '\n')
+            return valor;
+        cout << "Error: ingrese un numero entero valido." << endl;
+        cin.clear();
+        while (cin.get() != '\n') {}
+    }
+}
+```
+
+- **`cin.fail()`**: devuelve `true` si la última lectura falló (por ejemplo, el usuario escribió `"abc"` donde se esperaba un número). `!cin.fail()` significa "la lectura fue exitosa".
+- **`cin.peek() == '\n'`**: `peek()` mira el siguiente carácter pendiente en el buffer **sin consumirlo**. Esto comprueba que, justo después del número leído, venga inmediatamente un salto de línea. Es necesario porque si el usuario escribe `"25abc"`, `cin >> valor` extrae `25` (sin fallar) y deja `"abc"` pendiente en el buffer — sin este chequeo, se aceptaría `25` como válido, dejando `"abc"` para contaminar la **siguiente** lectura de `cin` en el programa.
+- **`cin.clear()`**: cuando `cin` entra en estado de error, queda "bloqueado" — cualquier lectura posterior fallará automáticamente hasta resetear ese estado. `clear()` limpia esas banderas de error.
+- **`while (cin.get() != '\n') {}`**: descarta, carácter por carácter, todo el contenido corrupto que quedó en el buffer, hasta encontrar el `\n` (que también se consume). Es imprescindible: sin esto, la siguiente vuelta del `while` externo volvería a leer sobre el mismo texto corrupto sin limpiar, entrando en un **bucle infinito** que repite el mismo error para siempre.
+
+#### `leerMonto` — mismo patrón + validación de regla de negocio
+
+```cpp
+if (!cin.fail() && cin.peek() == '\n' && monto > 0)
+    return monto;
+```
+
+Idéntico a `leerEntero`, cambiando `int` por `float` y agregando `monto > 0` — combina validación de **formato** (que sea un número bien formado) con validación de **regla de negocio** (que tenga sentido en el dominio: un monto bancario no puede ser negativo ni cero). Si `monto` fuera `-50` (formato válido), la condición completa igual sería `false` por culpa de `monto > 0`.
+
+#### `leerTexto` — `getline(cin >> ws, texto)`
+
+```cpp
+string leerTexto(string mensaje)
+{
+    string texto;
+    while (true)
+    {
+        cout << mensaje;
+        getline(cin >> ws, texto);
+        if (!texto.empty()) return texto;
+        cout << "Error: el campo no puede estar vacio." << endl;
+    }
+}
+```
+
+- No se usa `cin >> texto` porque se detiene en el primer espacio en blanco (un nombre con espacio como `"Ana Torres"` solo capturaría `"Ana"`). `getline` lee la línea completa, espacios incluidos.
+- **`cin >> ws`**: `ws` es un manipulador de flujo que descarta cualquier espacio en blanco pendiente (incluyendo saltos de línea residuales de una lectura anterior con `cin >>`). Resuelve un bug clásico: si justo antes se usó `cin >> algo` (como en `leerEntero`/`leerId`), queda un `\n` sin consumir; sin `cin >> ws`, la primera llamada a `getline` leería inmediatamente ese `\n` residual y devolvería una cadena vacía, sin darle al usuario oportunidad real de escribir.
+- Solo valida `!texto.empty()` — no exige ningún formato particular, a diferencia de fecha/hora/ID.
+
+#### `leerTipo` y `leerEstado` — validación contra una lista fija
+
+```cpp
+if (tipo == "Transferencia" || tipo == "Retiro" || tipo == "PagoServicio" ||
+    tipo == "CompraWeb" || tipo == "Deposito")
+    return tipo;
+```
+
+No necesitan el chequeo `cin.fail()`/`peek()` porque `cin >> string` nunca falla por formato — cualquier secuencia de caracteres sin espacios es válida como `string`. El único criterio aquí es semántico: coincidencia **exacta** (sensible a mayúsculas/minúsculas) con uno de los 5 valores permitidos. `leerEstado` es análogo, con la lista `Aprobada, Pendiente, Rechazada, Observada, Anulada` — ambas listas coinciden exactamente con los valores sugeridos en el PDF.
+
+#### `esDigito` — auxiliar reutilizada por tres validadores
+
+```cpp
+bool esDigito(char c)
+{
+    return c >= '0' && c <= '9';
+}
+```
+
+Compara directamente los valores ASCII: como `'0'`-`'9'` son consecutivos en la tabla ASCII (48-57), esta comparación de rango es equivalente a verificar si `c` es un dígito. No se usó `isdigit()` de `<cctype>` (la función estándar equivalente) — decisión de estilo consistente con implementar los detalles "desde cero", aunque usar `isdigit()` no violaría ninguna restricción del PDF. Se reutiliza dentro de `leerFecha`, `leerHora` y `leerId`.
+
+#### `leerFecha` — validación por capas: formato + rangos lógicos
+
+```cpp
+if (fecha.size() != 10) { ...error...; continue; }               // Capa 1: longitud exacta
+if (fecha[4] != '-' || fecha[7] != '-') { ...error...; continue; } // Capa 2: guiones en posición
+// Capa 3: recorrido con esDigito, saltando posiciones 4 y 7
+int anio = stoi(fecha.substr(0,4));
+int mes  = stoi(fecha.substr(5,2));
+int dia  = stoi(fecha.substr(8,2));
+// Capa 4: anio<=0, mes 1-12, dia 1-31
+```
+
+- **Capa 1**: el formato `YYYY-MM-DD` siempre tiene 10 caracteres — detecta, por ejemplo, `"2026-6-1"` (sin ceros a la izquierda).
+- **Capa 2**: acceso directo por índice (`fecha[4]`, `fecha[7]`) para verificar los guiones — detecta formatos como `"2026/06/01"`.
+- **Capa 3**: recorre cada posición saltando (con `continue`) las de los guiones, usando `esDigito` en el resto; corta con `break` en el primer carácter inválido.
+- **Capa 4**: `fecha.substr(inicio, cantidad)` extrae cada componente como texto, `stoi(...)` lo convierte a entero, y se validan rangos: año positivo, mes 1-12, día 1-31.
+- **Limitación reconocida**: el día se valida contra el rango fijo `1-31` sin considerar cuántos días tiene realmente cada mes — por ejemplo, `"2026-02-31"` (31 de febrero, inexistente) pasaría la validación. Es una simplificación consciente, válida para mencionar proactivamente en la sustentación.
+
+#### `leerHora` — mismo patrón que `leerFecha`, aplicado a `HH:MM:SS`
+
+Réplica estructural de `leerFecha`: longitud 8, dos puntos (`:`) en posiciones 2 y 5, recorrido con `esDigito`, y rangos exactos y correctos (horas 0-23, minutos y segundos 0-59) — a diferencia de la fecha, aquí no hay ninguna simplificación pendiente.
+
+#### `leerId` — formato fijo con prefijo literal
+
+```cpp
+if (id.size() != 9) ...
+if (id[0] != 'T' || id[1] != 'X' || id[2] != '-') ...
+// bucle desde la posición 3 hasta la 8, verificando esDigito
+```
+
+Longitud 9 (`TX-XXXXXX` = 2 letras + 1 guion + 6 dígitos), verificación de las letras específicas `T`, `X` y el guion, y verificación de que las 6 posiciones restantes sean dígitos.
+
+#### Resumen de la sección de validaciones
+
+| Función | Qué valida | Mecanismo | Reutiliza |
+|---|---|---|---|
+| `leerEntero` | Número entero completo, sin basura después | `cin.fail()` + `cin.peek() == '\n'` + limpieza de buffer | — |
+| `leerMonto` | Igual que `leerEntero`, más `> 0` | Igual + condición de negocio extra | — |
+| `leerTexto` | No vacío (acepta espacios internos) | `getline(cin >> ws, texto)` + `.empty()` | — |
+| `leerTipo` / `leerEstado` | Coincide con 1 de 5 valores permitidos | Cadena de `||` con `==` | — |
+| `esDigito` | Carácter `'0'`-`'9'` | Comparación de rango ASCII | Usada por `leerFecha`, `leerHora`, `leerId` |
+| `leerFecha` | `YYYY-MM-DD` + rangos de mes/día | Longitud + posiciones + `esDigito` + `stoi` + rangos | `esDigito` |
+| `leerHora` | `HH:MM:SS` + rangos de hora/min/seg | Misma estructura que `leerFecha` | `esDigito` |
+| `leerId` | `TX-XXXXXX` | Longitud + prefijo literal + `esDigito` | `esDigito` |
+
+El principio unificador: **nunca confiar en que el usuario escribirá algo bien formado**, validar en capas progresivas, y **nunca dejar avanzar el programa** con un dato que no pasó todas las validaciones.
 
 ---
 
 ## 9. `main()`: el flujo completo del programa
+
+### 9.1 Preparación inicial (antes del menú)
 
 ```cpp
 int main()
@@ -544,36 +1063,121 @@ int main()
     cout << "--- Sistema de Analisis de Transacciones ---" << endl;
     GestorTransacciones gestor(15013);
 
-    // CARGA AUTOMATICA AL INICIAR EL PROGRAMA
+    cout << "Iniciando carga automatica de datos desde el archivo masivo..." << endl;
+    using namespace chrono;
     auto inicio = high_resolution_clock::now();
     gestor.cargarDesdeArchivo("transacciones_masivo.csv", ',');
     auto fin = high_resolution_clock::now();
-    mostrarTiempo("Carga", inicio, fin);
+    mostrarTiempo("Carga",inicio,fin);
 
     int opcion = 0;
-    ...
-    while (opcion != 8)
+    string id, origen, cliente, tipo, fecha, hora, estado, fInicio, fFin;
+    float monto;
+```
+
+- `GestorTransacciones gestor(15013);`: **una sola instancia**, viviendo en la pila (no un puntero, sin `new`) durante toda la ejecución — todas las operaciones del menú actúan sobre este mismo objeto.
+- **Carga automática**: se ejecuta el patrón "sándwich" de `chrono` (sección 8.1) alrededor de `cargarDesdeArchivo`, cumpliendo el requisito del PDF de demostrar el sistema con al menos 10,000 transacciones desde el primer momento, sin depender de que el usuario recuerde ejecutar una opción de menú.
+- **Variables declaradas una sola vez, fuera del `switch`** (`id, origen, cliente, ...`): se reutilizan entre distintos `case` (por ejemplo, `id` en los case 1, 2, 5 y 6), en vez de redeclararlas dentro de cada uno.
+- `opcion = 0;`: valor inicial que no corresponde a ninguna opción válida, para que la condición del `while` (`opcion != 8`) sea verdadera en la primera vuelta.
+
+### 9.2 El bucle principal: `while (opcion != 8)`
+
+```cpp
+while (opcion != 8)
+{
+    // ... imprime las 8 opciones del menú ...
+    opcion = leerEntero("Seleccione una opcion: ");
+    switch (opcion) { ... }
+}
+```
+
+El menú se **redibuja por completo en cada vuelta** — no hay una versión estática que se muestre una sola vez. La condición de salida se evalúa **al principio** de cada vuelta: aunque el usuario elija `8` dentro del `switch`, el `case 8` se ejecuta una vez (imprime el mensaje de despedida) antes de que el `while` vuelva a evaluar su condición y decida terminar — no hay ningún `return`/`break` que rompa el `while` directamente desde dentro del `case 8`.
+
+### 9.3 Por qué cada `case` tiene sus propias llaves `{ }`
+
+```cpp
+switch (opcion)
+{
+case 1:
     {
-        // Imprime el menú
-        opcion = leerEntero("Seleccione una opcion: ");
-        switch (opcion)
-        {
-        case 1: /* registrar */ break;
-        case 2: /* buscar */ break;
-        case 3: /* mostrar cronológico */ break;
-        case 4: /* rango de fechas */ break;
-        case 5: /* actualizar estado */ break;
-        case 6: /* eliminar */ break;
-        case 7: /* estadísticas */ break;
-        case 8: /* salir */ break;
-        default: /* opción inválida */ 
-        }
+        id = leerId(...);
+        ...
+        break;
+    }
+case 2:
+    {
+        ...
+        break;
+    }
+...
+}
+```
+
+En un `switch`, todos los `case` que no tienen llaves propias **comparten el mismo scope**. Si `case 1` y `case 2` declararan ambos, por ejemplo, `auto inicio = ...;` sin llaves, el compilador marcaría un **error de redeclaración**, porque sin llaves ambas declaraciones estarían técnicamente en el mismo bloque. Al envolver cada `case` en su propio `{ }`, cada uno obtiene un **scope aislado**: la variable `inicio` de `case 1` es una variable completamente distinta a la `inicio` de `case 2`, aunque compartan nombre. Esto explica por qué `auto inicio = chrono::high_resolution_clock::now();` se repite en casi todos los `case` sin que el compilador se queje.
+
+### 9.4 Recorrido de cada `case`
+
+#### `case 1` — Registrar (Funcionalidad 2)
+```cpp
+id = leerId(...); origen = leerTexto(...); cliente = leerTexto(...); tipo = leerTipo();
+monto = leerMonto(...); fecha = leerFecha(...); hora = leerHora(...); estado = leerEstado();
+auto inicio = ...; gestor.nuevaTransaccion(...); auto fin = ...;
+mostrarTiempo("Insercion",inicio,fin);
+```
+Los 8 campos se piden y validan **antes** de iniciar la medición de tiempo — coherente con el principio de no incluir el tiempo de tecleo del usuario dentro de la medición de "Inserción" (sección 8.1).
+
+#### `case 2` — Buscar por ID (Funcionalidad 3)
+El más simple: pide el ID validado, mide el tiempo alrededor de `buscarTransaccion` (que delega en `tablaHash->buscarPorId`, O(1) amortizado).
+
+#### `case 3` — Consulta cronológica (Funcionalidad 4)
+```cpp
+int k;
+k = leerEntero(...);
+while(k<=0) { cout<<"Debe ser mayor que cero"<<endl; k = leerEntero(...); }
+```
+Aquí aparece una **validación adicional manual**, fuera de las funciones `leer*` reutilizables: `leerEntero` garantiza formato numérico, pero un `while (k<=0)` propio de este `case` garantiza además que `k` sea positivo. Es una asimetría de diseño notable: `leerMonto` incorpora su validación de "mayor que cero" **dentro** de la función reutilizable, mientras que aquí se dejó como un bucle suelto en `main()` en vez de crear una función `leerEnteroPositivo` — funcionalmente correcto, pero inconsistente en estilo.
+
+#### `case 4` — Consulta por rango (Funcionalidad 5)
+```cpp
+fInicio = leerFecha(...); fFin = leerFecha(...);
+while (fInicio > fFin) { ...; fInicio = leerFecha(...); fFin = leerFecha(...); }
+...
+gestor.MostrarPorRangoFechas(fInicio, fFin, false);
+```
+- Validación de coherencia entre fechas (`fInicio > fFin`, comparación de strings que funciona por el mismo principio que la clave del AVL: ancho fijo → orden lexicográfico = orden cronológico). Si falla, se vuelven a pedir **ambas** fechas desde cero, aunque solo una estuviera mal.
+- El tercer argumento `false` corresponde al parámetro `limite`/`limitacion` de `consultarRangoFechasR`: indica que se muestren **todos** los resultados (no solo los primeros 30), aunque el conteo total siempre se calcula completo.
+
+#### `case 5` — Actualizar estado (Funcionalidad 6)
+Pide ID y nuevo estado (validados), mide el tiempo de `ActualizarEstadoTransaccion` — O(1) amortizado porque solo localiza el puntero en el hash y llama `setEstado()`, sin tocar el AVL.
+
+#### `case 6` — Eliminar (Funcionalidad 7)
+Pide el ID, mide el tiempo de `eliminarTransaccion` — reconstruye la clave del AVL desde el hash, elimina primero del árbol y luego del hash, con auto-verificación.
+
+#### `case 7` — Estadísticas (Funcionalidad 8)
+```cpp
+case 7:
+    gestor.mostrarEstadisticas();
+    break;
+```
+El **único** `case` sin llaves propias (no declara variables locales) y el **único que no mide tiempo con `chrono`** — la tabla de tiempos del PDF no incluye explícitamente "estadísticas" como fila obligatoria, lo que podría explicar la omisión, aunque sería sencillo agregar el mismo patrón de medición.
+
+#### `case 8` — Salir
+Solo imprime un mensaje; el `while` termina en la **siguiente** evaluación de `opcion != 8`, no por ningún mecanismo dentro del propio `case`.
+
+#### `default`
+Captura cualquier valor fuera de 1-8. `leerEntero` garantiza formato numérico pero no rango válido — este `default` es la capa final que evita ejecutar código para una opción inexistente.
+
+### 9.5 Cierre del programa y destrucción automática (RAII)
+
+```cpp
     }
     return 0;
 }
 ```
 
-### Flujo de la información (visión de alto nivel)
+Al terminar `main()` (cuando `opcion == 8`), la variable local `gestor` sale de *scope* y se **destruye automáticamente** — esto dispara en cascada: `~GestorTransacciones()` → `delete tablaHash` (destruye cada `ListaEnlazada`, liberando cada `Nodo` y cada `Transaccion*`) y `delete arbolAVL` (recorre en post-order liberando cada `NodoAVL`, sin duplicar la liberación de las transacciones). Esto ocurre por **RAII** (*Resource Acquisition Is Initialization*): como `gestor` es una variable de pila, no un puntero manual, su destructor se garantiza que se ejecute al salir de *scope*, sin necesitar un `delete gestor;` explícito.
+
+### 9.6 Flujo de la información (visión de alto nivel)
 
 ```
 Archivo .csv (transacciones_masivo.csv)
@@ -589,21 +1193,22 @@ HashTable   AVL Tree     ← cada Transaccion* insertada en AMBAS estructuras
    └────┬────┘
         ▼
    Menú interactivo (main)
-   1. Registrar   → Hash.buscar (evitar duplicado) → new Transaccion → Hash.insertar + AVL.insert
+   1. Registrar   → Hash.buscarPorId (evitar duplicado) → new Transaccion → Hash.insertar + AVL.insert
    2. Buscar      → Hash.buscarPorId               → imprimir()
    3. Cronológico → AVL.mostrarCronologico (inorder)→ imprimir() x k
    4. Rango       → AVL.consultarRangoFechas        → imprimir() x resultados
    5. Actualizar  → Hash.buscarPorId → setEstado()  (mismo puntero, visible en ambas estructuras)
    6. Eliminar    → Hash.buscarPorId (leer datos) → AVL.eliminar(key) → Hash.eliminar(id) (libera memoria)
-   7. Estadísticas→ AVL.generarReporteEstadistico (recorrido completo O(n))
-   8. Salir       → destructores de GestorTransacciones → AVL::destruir + HashTable::~HashTableEncadenamiento
+   7. Estadísticas→ AVL.generarReporteEstadistico (recorrido completo, sin medir tiempo)
+   8. Salir       → return 0 → destrucción RAII de "gestor" → AVL::destruir + ~HashTableEncadenamiento
 ```
 
-### Puntos a resaltar en la sustentación
-1. **Carga automática al inicio** (antes de mostrar el menú): el PDF exige demostrar el funcionamiento con al menos 10,000 transacciones desde el primer momento, y medir el tiempo de esa carga — el código lo hace automáticamente apenas se ejecuta el programa, sin necesidad de una opción de menú separada.
-2. **Cada opción del menú mide su propio tiempo** con `chrono`, cumpliendo exactamente la tabla de tiempos exigida en la sección 5 del informe.
-3. **`switch (opcion)` con bloques `{ }` en cada `case`**: los bloques (`case 1: { ... break; }`) son necesarios porque dentro de cada `case` se declaran variables locales como `inicio`/`fin`; sin las llaves, C++ compartiría el mismo *scope* entre todos los `case` del `switch`, lo que generaría errores de redeclaración de variables entre distintos casos.
-4. **Gestión de memoria al salir**: al terminar `main()`, `gestor` (una variable local, no un puntero) se destruye automáticamente al salir de *scope*, lo que dispara `~GestorTransacciones()` → `delete tablaHash` y `delete arbolAVL` → destructores en cascada de `HashTableEncadenamiento` (que libera todas las `Transaccion*`) y de `AVL` (que libera todos los `NodoAVL`, sin duplicar la liberación de las transacciones, como se explicó en la sección 4).
+### 9.7 Puntos a resaltar en la sustentación
+1. **Carga automática al inicio** (antes de mostrar el menú): el PDF exige demostrar el funcionamiento con al menos 10,000 transacciones desde el primer momento, y medir el tiempo de esa carga — el código lo hace automáticamente apenas se ejecuta el programa.
+2. **Cada opción del menú mide su propio tiempo** con `chrono` (salvo `case 7`), cumpliendo la tabla de tiempos de la sección 5 del informe, siempre envolviendo solo la operación algorítmica, no la espera del teclado.
+3. **`switch (opcion)` con bloques `{ }` en cada `case`**: necesarios para dar *scope* aislado a variables locales como `inicio`/`fin` en cada `case`, evitando errores de redeclaración.
+4. **Inconsistencia menor de diseño**: la validación de `k > 0` en `case 3` se hace con un `while` manual en `main()`, en vez de una función `leer*` reutilizable — funciona igual de bien, pero rompe el patrón que sí siguen `leerMonto` o las demás funciones de validación.
+5. **Gestión de memoria al salir**: al terminar `main()`, `gestor` (variable local, no puntero) se destruye automáticamente por RAII, disparando en cascada `~GestorTransacciones()` → `delete tablaHash` y `delete arbolAVL`, liberando toda la memoria sin duplicar la liberación de las transacciones (sección 4).
 
 ---
 
